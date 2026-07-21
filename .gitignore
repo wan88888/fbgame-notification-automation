@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+screenshots/
+data/notifications.json
+data/*.csv
+!data/notifications.example.csv
+
+# 运营真实投放文件不入库，仅保留示例
+campaigns/*.csv
+!campaigns/*.example*.csv

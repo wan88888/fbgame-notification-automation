@@ -1,0 +1,6 @@
+{
+  "_说明": "可选映射：\"CSV文件名(不含.csv)\": 值。值可以是两种写法：",
+  "_写法1_只映射显示名": "\"AHA\": \"AHA 游戏显示名\"",
+  "_写法2_直达URL最稳最快": "\"AHA\": { \"name\": \"AHA\", \"url\": \"https://developers.facebook.com/apps/APP_ID/....\" }",
+  "AHA": { "name": "AHA", "url": "" }
+}

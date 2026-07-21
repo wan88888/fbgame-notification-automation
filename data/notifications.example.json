@@ -1,0 +1,9 @@
+{
+  "projectName": "My Game",
+  "notifications": [
+    { "label": "Egg_001", "date": "2026-07-19", "sendTimeStrategy": "Predicted Best Time" },
+    { "label": "Egg_002", "date": "2026-07-18", "sendTimeStrategy": "Predicted Best Time" },
+    { "label": "Egg_003", "date": "2026-07-17", "sendTimeStrategy": "Predicted Best Time" },
+    { "label": "Egg_004", "date": "2026-07-16", "sendTimeStrategy": "Predicted Best Time" }
+  ]
+}

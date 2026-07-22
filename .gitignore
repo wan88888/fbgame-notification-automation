@@ -12,3 +12,5 @@ campaigns/content/*.csv
 !campaigns/content/*.example*.csv
 campaigns/schedule/*.csv
 !campaigns/schedule/*.example*.csv
+# 清洗前的原始内容表备份
+campaigns/content-raw/

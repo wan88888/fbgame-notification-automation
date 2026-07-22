@@ -82,10 +82,11 @@ async function processGame(
   }
 
   let attempted = 0;
+  let skipTurnOn = false; // 本游戏命中 active 上限后置真，仅影响本游戏。
   for (const [i, notif] of items.entries()) {
     try {
       await editNotification(page, notif, cfg);
-      if (cfg.autoTurnOn) {
+      if (cfg.autoTurnOn && !skipTurnOn) {
         await turnOnNotification(page, notif, cfg);
       }
       result.succeeded += 1;
@@ -96,6 +97,14 @@ async function processGame(
       result.failedLabels.push({ label: notif.label, error: msg });
       // 关闭可能残留的编辑面板/菜单，继续下一条。
       await page.keyboard.press('Escape').catch(() => undefined);
+
+      // 命中「10 条 active 上限」后，后续 Turn On 必然继续失败，本游戏剩余不再尝试 Turn On。
+      if (msg.includes('ACTIVE_LIMIT') || /more than 10 active/i.test(msg)) {
+        log.warn(
+          `[${game.projectName}] 已达 Meta 每 app 10 条 active 上限，跳过本游戏剩余条目的 Turn On（请先到后台清理 active 通知）。`,
+        );
+        skipTurnOn = true;
+      }
     }
     attempted += 1;
 

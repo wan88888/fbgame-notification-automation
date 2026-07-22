@@ -1,0 +1,14 @@
+flowchart TD
+    A[人：准备推送内容表 CSV] --> B["人：放到 campaigns/content/&lt;游戏&gt;.csv"]
+    B --> C[机：npm run prep<br/>清洗内容表 + 生成排期表]
+    C --> D["人：只填 schedule 的 date 列<br/>每条不同日期"]
+    D --> E[机：npm run validate<br/>检查是否合格]
+    E --> F{有红色错误?}
+    F -->|有| G[人：按提示修正<br/>回到对应步骤]
+    G --> E
+    F -->|没有| H[人：确认 AdsPower 已开且已登录 Meta]
+    H --> I[机：双击 run.command 或 npm start<br/>自动上传/编辑/Save/Turn On]
+    I --> J[看窗口里的成功/失败汇总]
+    J --> K{有失败?}
+    K -->|有| L[看 screenshots + 对照报错表]
+    K -->|没有| M[完成，去后台复核]

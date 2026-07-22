@@ -252,6 +252,14 @@ export async function turnOnNotification(
   await openRowMenu(page, notif.label, t, cfg.humanize);
   await think(cfg.humanize);
   await clickByText(page, S.menuItems.turnOn, t, cfg.humanize);
+
+  // 检查是否触发 Meta「每 app 最多 10 条 active」上限提示。
+  await page.waitForTimeout(1500);
+  if (await page.getByText(/more than 10 active/i).count()) {
+    throw new Error(
+      'ACTIVE_LIMIT: 已达 Meta 每个 app 最多 10 条 active 通知设置的上限（You cannot have more than 10 active notification settings per app）。',
+    );
+  }
   log.ok(`[${notif.label}] 已 Turn On`);
 }
 

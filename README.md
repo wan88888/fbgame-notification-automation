@@ -7,18 +7,19 @@
 > notifications → Create from CSV（批量创建）→ 逐条 View/Edit（设置日期 +
 > Send Time Strategy 为 Predicted Best Time → Save）→ 返回列表逐条 Turn On。
 
-## 运营同事：三步搞定（推荐）
+## 运营同事：几步搞定（半自动化）
+
+> **人**负责放文件、填日期、确认 AdsPower 已登录；**机器**负责清洗/生成排期、上传、编辑、Save、Turn On。
 
 1. 把内容表放进 `campaigns/content/<游戏>.csv`（如 `content/AHA.csv`）。
-2. 运行 `npm run gen-schedule`：自动从内容表的 `label` 生成
-   `schedule/<游戏>.schedule.csv`（策略固定为 Predicted Best Time），**只需手填 `date` 列**。
-3. 可选：`npm run validate` 检查内容表是否合格。
-4. 双击项目根目录的 **`run.command`**（或 `npm start`）。
-5. 看窗口里的成功/失败汇总即可；出错会在 `screenshots/` 留截图。
+2. `npm run prep`：一键清洗内容表 + 生成排期表。
+3. 打开 `schedule/<游戏>.schedule.csv`，**只填 `date` 列**（每条**不同日期**），再 `npm run validate`。
+4. 双击 **`run.command`**（或 `npm start`），看成功/失败汇总；出错看 `screenshots/`。
 
 > 多个游戏就放多对文件，一次运行全部处理完。首次双击会自动装依赖、并生成
 > `.env` 提示你填 `ADSPOWER_USER_ID`（填完再双击一次）。
-> 详见 [`campaigns/README.md`](campaigns/README.md)。
+> **运营请看** [`docs/运营操作指南.md`](docs/运营操作指南.md)（含流程图 + 报错对照表）；
+> Meta 平台限制另见 [`campaigns/README.md`](campaigns/README.md)，否则容易在 Save / Turn On 阶段失败。
 
 ## 工作原理
 
@@ -34,23 +35,37 @@
 
 ```
 src/
-  main.ts             流程编排入口
+  main.ts             流程编排入口（含 --validate-only）
   config.ts           读取 .env 与 notifications 配置
   adspower.ts         AdsPower 本地 API 客户端（start/stop/active）
-  playwright-utils.ts CDP 接管、日期格式化、行/菜单定位、截图等工具
+  playwright-utils.ts CDP 接管、窗口最大化、行/菜单定位与滚动、截图等工具
   selectors.ts        ★ 页面选择器集中配置（最可能需要按真实页面微调的地方）
   steps.ts            各步骤实现（导航 / 上传 CSV / 编辑 / Turn On）
   schedule.ts         解析排期表（label,date,send_time_strategy）
   campaigns.ts        从 campaigns/ 自动发现「内容表+排期表」配对
+  validate.ts         内容表校验（列/必填/重复 label/同日冲突/与排期对齐）
+  gen-schedule.ts     从内容表 label 生成/同步排期表
+  clean-content.ts    清洗内容表为 Meta 可接受格式
   types.ts            类型定义
   logger.ts           日志
 campaigns/            ★ 运营放文件的地方（见 campaigns/README.md）
   content/            内容表（如 AHA.csv）
   schedule/           排期表（如 AHA.schedule.csv）
+  content-raw/        清洗前的原始备份（clean-content 自动生成，不入库）
   projects.json       可选：文件名 → Meta 项目显示名 / 直达 URL 映射
 run.command           运营双击运行入口（macOS）
 data/                 进阶/兜底用的手写配置示例
 ```
+
+## 常用命令
+
+| 命令 | 作用 |
+|---|---|
+| `npm run prep` | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule） |
+| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`） |
+| `npm run gen-schedule` | 仅从内容表 `label` 生成/同步 `schedule/*.schedule.csv`（保留已填 `date`） |
+| `npm run validate` | 只校验内容表与排期，不启动浏览器 |
+| `npm start` | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page`） |
 
 ## 数据来源优先级
 
@@ -142,6 +157,8 @@ npm start
 | `--dry-run` | 走完导航/编辑但**不 Save、不 Turn On**（改点 Cancel 关闭编辑框） |
 | `--no-upload` | 跳过 Create from CSV（避免反复调试时重复批量创建） |
 | `--no-turn-on` | 本次不 Turn On（覆盖 `.env` 的 `AUTO_TURN_ON`） |
+| `--use-open-page` | 不导航，直接接管当前已打开的标签页（多游戏时只处理当前一个） |
+| `--validate-only` | 只校验内容表/排期，不启动浏览器（等同 `npm run validate`） |
 
 配合 `.env` 里调大 `SLOW_MO_MS`（如 `300`）能更清楚地观察每一步。
 出错时看 `screenshots/` 截图，只改 `src/selectors.ts` 对应文本即可。

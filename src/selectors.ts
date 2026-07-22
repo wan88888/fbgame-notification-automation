@@ -44,11 +44,7 @@ export const selectors = {
    * 虚线上传区里真正触发系统文件选择框的链接/文字。
    * 截图为「Or choose file on your device」（点击后弹出文件框）。
    */
-  chooseFileTexts: [
-    'choose file on your device',
-    'choose file',
-    'Drag and drop your file',
-  ],
+  chooseFileTexts: ['choose file on your device', 'choose file', 'Drag and drop your file'],
 
   /** 行内「...」菜单按钮的候选定位（每行末尾的三个点）。 */
   rowMenu: {

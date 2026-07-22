@@ -6,7 +6,14 @@ import { log } from './logger.js';
 
 /** 排期表里可识别的列名（大小写、空格、下划线均不敏感）。 */
 const LABEL_KEYS = ['label', 'labels', '文案', '文案label', 'name'];
-const DATE_KEYS = ['date', 'notificationdate', 'notification_date', '日期', '推送日期', 'scheduledate'];
+const DATE_KEYS = [
+  'date',
+  'notificationdate',
+  'notification_date',
+  '日期',
+  '推送日期',
+  'scheduledate',
+];
 const STRATEGY_KEYS = [
   'sendtimestrategy',
   'send_time_strategy',
@@ -19,7 +26,10 @@ const STRATEGY_KEYS = [
 ];
 
 function norm(key: string): string {
-  return key.trim().toLowerCase().replace(/[\s_]+/g, '');
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '');
 }
 
 function pick(row: Record<string, string>, candidates: string[]): string | undefined {
@@ -60,7 +70,7 @@ export function parseScheduleSheet(path: string): NotificationSchedule[] {
       relax_column_count: true,
     }) as Record<string, string>[];
   } catch (e) {
-    throw new Error(`排期表不是合法 CSV: ${abs}. ${(e as Error).message}`);
+    throw new Error(`排期表不是合法 CSV: ${abs}. ${(e as Error).message}`, { cause: e });
   }
 
   const result: NotificationSchedule[] = [];
@@ -77,9 +87,7 @@ export function parseScheduleSheet(path: string): NotificationSchedule[] {
       continue;
     }
 
-    result.push(
-      strategy ? { label, date, sendTimeStrategy: strategy } : { label, date },
-    );
+    result.push(strategy ? { label, date, sendTimeStrategy: strategy } : { label, date });
   }
 
   return result;

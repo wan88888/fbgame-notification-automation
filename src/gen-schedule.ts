@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
+import { csvEscape } from './csv-utils.js';
 
 const CONTENT_DIR = resolve(process.cwd(), 'campaigns/content');
 const SCHEDULE_DIR = resolve(process.cwd(), 'campaigns/schedule');
@@ -71,23 +72,13 @@ function extractLabels(contentPath: string): string[] {
   return labels;
 }
 
-/** 简单 CSV 转义（字段含逗号/引号/换行时加引号）。 */
-function csvEscape(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
 function writeSchedule(
   path: string,
   rows: { label: string; date: string; send_time_strategy: string }[],
 ): void {
   const lines = ['label,date,send_time_strategy'];
   for (const r of rows) {
-    lines.push(
-      [csvEscape(r.label), csvEscape(r.date), csvEscape(r.send_time_strategy)].join(','),
-    );
+    lines.push([csvEscape(r.label), csvEscape(r.date), csvEscape(r.send_time_strategy)].join(','));
   }
   writeFileSync(path, `${lines.join('\n')}\n`, 'utf-8');
 }

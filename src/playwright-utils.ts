@@ -2,9 +2,12 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { selectors } from './selectors.js';
-import { log } from './logger.js';
+import { log, getRunId } from './logger.js';
 import type { HumanizeConfig } from './config.js';
 import { humanClick } from './humanize.js';
+
+// toUsDate 现居于纯工具模块 date-utils（无浏览器依赖）；此处再导出以保持既有引用不变。
+export { toUsDate } from './date-utils.js';
 
 /** 未启用拟人化时的兜底配置。 */
 const NO_HUMANIZE: HumanizeConfig = {
@@ -26,12 +29,29 @@ export async function connectBrowser(wsEndpoint: string, slowMoMs: number): Prom
   return browser;
 }
 
-/** 取得（或新建）一个可用的 page。优先复用已有标签页。 */
-export async function getPage(browser: Browser): Promise<Page> {
+/**
+ * 取得（或新建）一个可用的 page。
+ * 若传入 preferHost（如 developers.facebook.com），优先复用 URL 命中该域名的标签页，
+ * 避免 AdsPower 里存在欢迎页/多标签时误接管到错误的 tab；否则退回第一个标签页。
+ */
+export async function getPage(browser: Browser, preferHost?: string): Promise<Page> {
   const context = browser.contexts()[0];
   if (!context) throw new Error('浏览器没有可用的 context');
   const existing = context.pages();
-  const page = existing.length > 0 ? existing[0] : await context.newPage();
+
+  let page: Page | undefined;
+  if (preferHost && existing.length > 0) {
+    page = existing.find((p) => {
+      try {
+        return new URL(p.url()).hostname.includes(preferHost);
+      } catch {
+        return false;
+      }
+    });
+    if (page) log.info(`复用匹配「${preferHost}」的已打开标签页`);
+  }
+  if (!page) page = existing.length > 0 ? existing[0] : await context.newPage();
+
   await page.bringToFront();
   await maximizeWindow(context, page);
   return page;
@@ -60,29 +80,17 @@ async function maximizeWindow(context: BrowserContext, page: Page): Promise<void
 }
 
 /**
- * 将日期规整为后台日期框接受的 "M/D/YYYY"（无前导零，匹配截图里的 7/20/2026）。
- * 支持输入 "YYYY-MM-DD" 或 "M/D/YYYY" / "MM/DD/YYYY"。
+ * 出错时保存整页截图，便于排查选择器问题。
+ * 文件名以本次运行的 runId 打头（与 logs/run-<runId>.log 同前缀），
+ * 方便把「某次运行日志」和「该次出错截图」对应起来。
  */
-export function toUsDate(input: string): string {
-  const iso = input.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (iso) {
-    const [, y, m, d] = iso;
-    return `${Number(m)}/${Number(d)}/${y}`;
-  }
-  const us = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (us) {
-    const [, m, d, y] = us;
-    return `${Number(m)}/${Number(d)}/${y}`;
-  }
-  throw new Error(`无法识别的日期格式: "${input}"（请用 YYYY-MM-DD 或 M/D/YYYY）`);
-}
-
-/** 出错时保存整页截图，便于排查选择器问题。 */
 export async function screenshotOnError(page: Page, dir: string, name: string): Promise<void> {
   try {
     mkdirSync(resolve(process.cwd(), dir), { recursive: true });
     const safe = name.replace(/[^\w.-]+/g, '_');
-    const path = resolve(process.cwd(), dir, `${Date.now()}_${safe}.png`);
+    const runId = getRunId();
+    const prefix = runId ? `run-${runId}_` : '';
+    const path = resolve(process.cwd(), dir, `${prefix}${Date.now()}_${safe}.png`);
     await page.screenshot({ path, fullPage: true });
     log.warn(`已保存出错截图: ${path}`);
   } catch (e) {
@@ -121,10 +129,11 @@ export async function scrollRowIntoView(
   }
 
   // 把鼠标移到列表区域中心，便于滚轮作用到正确的滚动容器。
-  const anchor =
-    (await page.getByText(selectors.notificationsPageHeadingText, { exact: false }).count())
-      ? page.getByText(selectors.notificationsPageHeadingText, { exact: false }).first()
-      : node;
+  const anchor = (await page
+    .getByText(selectors.notificationsPageHeadingText, { exact: false })
+    .count())
+    ? page.getByText(selectors.notificationsPageHeadingText, { exact: false }).first()
+    : node;
   const box = await anchor.boundingBox().catch(() => null);
   const cx = box ? box.x + box.width / 2 : 600;
   const cy = box ? box.y + Math.min(box.height + 200, 400) : 400;
@@ -161,7 +170,10 @@ export async function openRowMenu(
   // 策略 1：语义 row 内找 button（取最后一个，通常是行尾的 "..."）。
   const row = findRow(page, label);
   if (await row.count()) {
-    await row.first().scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
+    await row
+      .first()
+      .scrollIntoViewIfNeeded({ timeout: timeoutMs })
+      .catch(() => undefined);
     const btn = row.getByRole('button').last();
     if (await btn.count()) {
       await humanClick(page, btn, hz, timeoutMs);

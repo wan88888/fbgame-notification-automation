@@ -88,7 +88,7 @@ npm run clean-content
 2. `npm run prep`（清洗 + 生成排期）。
 3. **只填** `schedule/*.schedule.csv` 的 `date` 列（每条用**不同日期**，见下方限制）。
 4. `npm run validate` 检查是否合格。
-5. 确认 AdsPower 已开且已登录后，双击 `run.command`（或 `npm start`）。
+5. 确认 AdsPower 已开且已登录后，执行 `./run.sh`（或 `npm start`）。
 6. 看窗口里的成功/失败汇总；出错会在 `screenshots/` 留截图。
 
 > 带 `.example` 的示例文件不会被处理，仅供参考格式。

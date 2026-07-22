@@ -14,10 +14,12 @@
 1. 把内容表放进 `campaigns/content/<游戏>.csv`（如 `content/AHA.csv`）。
 2. `npm run prep`：一键清洗内容表 + 生成排期表。
 3. 打开 `schedule/<游戏>.schedule.csv`，**只填 `date` 列**（每条**不同日期**），再 `npm run validate`。
-4. 双击 **`run.command`**（或 `npm start`），看成功/失败汇总；出错看 `screenshots/`。
+4. 启动运行，看成功/失败汇总；出错看 `screenshots/`：
+   - **推荐**：在项目目录执行 **`./run.sh`**（首次需 `chmod +x run.sh`）
+   - **任意平台**：也可直接 `npm start`
 
-> 多个游戏就放多对文件，一次运行全部处理完。首次双击会自动装依赖、并生成
-> `.env` 提示你填 `ADSPOWER_USER_ID`（填完再双击一次）。
+> 多个游戏就放多对文件，一次运行全部处理完。首次运行 `./run.sh` 会自动装依赖、并生成
+> `.env` 提示你填 `ADSPOWER_USER_ID`（填完再运行一次）。
 > **运营请看** [`docs/运营操作指南.md`](docs/运营操作指南.md)（含流程图 + 报错对照表）；
 > Meta 平台限制另见 [`campaigns/README.md`](campaigns/README.md)，否则容易在 Save / Turn On 阶段失败。
 
@@ -53,19 +55,19 @@ campaigns/            ★ 运营放文件的地方（见 campaigns/README.md）
   schedule/           排期表（如 AHA.schedule.csv）
   content-raw/        清洗前的原始备份（clean-content 自动生成，不入库）
   projects.json       可选：文件名 → Meta 项目显示名 / 直达 URL 映射
-run.command           运营双击运行入口（macOS）
+run.sh                运营运行入口（./run.sh；也可直接 npm start）
 data/                 进阶/兜底用的手写配置示例
 ```
 
 ## 常用命令
 
-| 命令 | 作用 |
-|---|---|
-| `npm run prep` | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule） |
-| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`） |
-| `npm run gen-schedule` | 仅从内容表 `label` 生成/同步 `schedule/*.schedule.csv`（保留已填 `date`） |
-| `npm run validate` | 只校验内容表与排期，不启动浏览器 |
-| `npm start` | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page`） |
+| 命令                    | 作用                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `npm run prep`          | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule）                   |
+| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`）                                          |
+| `npm run gen-schedule`  | 仅从内容表 `label` 生成/同步 `schedule/*.schedule.csv`（保留已填 `date`）                      |
+| `npm run validate`      | 只校验内容表与排期，不启动浏览器                                                               |
+| `npm start`             | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page`） |
 
 ## 数据来源优先级
 
@@ -76,6 +78,8 @@ data/                 进阶/兜底用的手写配置示例
 3. `.env` 里的 `PROJECT_NAME` + `NOTIFICATIONS_CONFIG` + `CSV_FILE` —— 单游戏兜底。
 
 ## 首次技术配置（一次性，由懂技术的同学做）
+
+> 需要 **Node.js ≥ 18**（代码用到全局 `fetch`）。仓库根有 `.nvmrc`，装了 nvm 可直接 `nvm use`。
 
 ```bash
 npm install
@@ -90,8 +94,8 @@ cp .env.example .env
 - `ADSPOWER_API_KEY`：若在 AdsPower 里开启了 API 鉴权才需要。
 - 其余运行参数见文件内注释。
 
-配好后，日常使用就交给运营：往 `campaigns/content/` 与 `campaigns/schedule/` 放文件 + 双击 `run.command`。
-（`run.command` 首次运行也会自动帮忙装依赖、生成 `.env`。）
+配好后，日常使用就交给运营：往 `campaigns/content/` 与 `campaigns/schedule/` 放文件，然后执行
+`./run.sh`（或 `npm start`）。（`run.sh` 首次运行也会自动帮忙装依赖、生成 `.env`。）
 
 ## 进阶：手写多游戏配置（可选）
 
@@ -102,10 +106,16 @@ cp .env.example .env
 ```json
 {
   "games": [
-    { "projectName": "Game A", "csv": "./data/gameA.csv",
-      "notifications": [ { "label": "Egg_001", "date": "2026-07-19" } ] },
-    { "projectName": "Game B", "csv": "./data/gameB.csv",
-      "notificationsFile": "./data/gameB.notifications.json" }
+    {
+      "projectName": "Game A",
+      "csv": "./data/gameA.csv",
+      "notifications": [{ "label": "Egg_001", "date": "2026-07-19" }]
+    },
+    {
+      "projectName": "Game B",
+      "csv": "./data/gameB.csv",
+      "notificationsFile": "./data/gameB.notifications.json"
+    }
   ]
 }
 ```
@@ -121,11 +131,19 @@ cp .env.example .env
 npm start          # = tsx src/main.ts
 ```
 
-类型检查：
+### 开发与代码质量（面向维护者）
 
 ```bash
-npm run typecheck
+npm run check        # 推荐：一键 typecheck + lint + format:check + test（与 CI 相同）
+npm run typecheck    # tsc --noEmit，类型检查（不产出文件）
+npm run lint         # ESLint 检查；npm run lint:fix 自动修复
+npm run format       # Prettier 格式化；npm run format:check 只检查
+npm test             # vitest 跑纯函数单测；npm run test:watch 监听模式
 ```
+
+`npm run build`（`tsc`）会把 `src/` 编译到 `dist/`。**日常运行并不需要它**——`npm start` 直接用
+`tsx` 跑 TypeScript 源码。仅当要在没有 `tsx`、需要纯 JS 产物的环境部署时才用 `build`
+（`dist/` 已被 `.gitignore` 忽略，不入库）。
 
 ### 先在单个项目上调试（推荐流程）
 
@@ -150,15 +168,15 @@ npm start
 
 调试参数说明：
 
-| 参数 | 作用 |
-|---|---|
-| `--game <名称>` | 只处理指定游戏（按 projectName 匹配，可重复传多个） |
-| `--limit <N>` | 每个游戏最多处理前 N 条（调试建议 `1`） |
-| `--dry-run` | 走完导航/编辑但**不 Save、不 Turn On**（改点 Cancel 关闭编辑框） |
-| `--no-upload` | 跳过 Create from CSV（避免反复调试时重复批量创建） |
-| `--no-turn-on` | 本次不 Turn On（覆盖 `.env` 的 `AUTO_TURN_ON`） |
-| `--use-open-page` | 不导航，直接接管当前已打开的标签页（多游戏时只处理当前一个） |
-| `--validate-only` | 只校验内容表/排期，不启动浏览器（等同 `npm run validate`） |
+| 参数              | 作用                                                             |
+| ----------------- | ---------------------------------------------------------------- |
+| `--game <名称>`   | 只处理指定游戏（按 projectName 匹配，可重复传多个）              |
+| `--limit <N>`     | 每个游戏最多处理前 N 条（调试建议 `1`）                          |
+| `--dry-run`       | 走完导航/编辑但**不 Save、不 Turn On**（改点 Cancel 关闭编辑框） |
+| `--no-upload`     | 跳过 Create from CSV（避免反复调试时重复批量创建）               |
+| `--no-turn-on`    | 本次不 Turn On（覆盖 `.env` 的 `AUTO_TURN_ON`）                  |
+| `--use-open-page` | 不导航，直接接管当前已打开的标签页（多游戏时只处理当前一个）     |
+| `--validate-only` | 只校验内容表/排期，不启动浏览器（等同 `npm run validate`）       |
 
 配合 `.env` 里调大 `SLOW_MO_MS`（如 `300`）能更清楚地观察每一步。
 出错时看 `screenshots/` 截图，只改 `src/selectors.ts` 对应文本即可。
@@ -212,7 +230,8 @@ Meta 后台是 React 应用，DOM 的 class 名混淆且不稳定，因此本项
 
 首次运行若在某一步失败：
 
-1. 查看 `screenshots/` 下自动保存的出错截图。
+1. 查看 `screenshots/` 下自动保存的出错截图，以及 `logs/run-<时间戳>.log` 完整运行日志
+   （出错截图文件名以同一个 `run-<时间戳>` 前缀开头，方便和该次日志一一对应）。
 2. 对照真实页面，修改 `src/selectors.ts` 里对应的文本即可，**业务逻辑无需改动**。
 3. 行末「...」菜单、日期输入框、发送策略下拉框这三处最容易因页面差异需要微调，
    相关多策略兜底在 `src/playwright-utils.ts` 与 `src/steps.ts`。

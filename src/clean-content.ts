@@ -11,10 +11,18 @@
  *
  * 用法：npm run clean-content
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
+import { csvEscape } from './csv-utils.js';
 
 const CONTENT_DIR = resolve(process.cwd(), 'campaigns/content');
 const BACKUP_DIR = resolve(process.cwd(), 'campaigns/content-raw');
@@ -33,17 +41,18 @@ function isKept(col: string): boolean {
   );
 }
 
-function csvEscape(value: string): string {
-  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
-}
-
-function cleanOne(file: string): { removed: string[]; renamed: string[]; kept: number; rows: number } {
+function cleanOne(file: string): {
+  removed: string[];
+  renamed: string[];
+  kept: number;
+  rows: number;
+} {
   const path = join(CONTENT_DIR, file);
   const raw = readFileSync(path, 'utf-8');
 
   // 用数组模式拿表头（保留原始顺序、含空列）。
-  const headerRow = (parse(raw, { toLine: 1, bom: true, relax_column_count: true }) as string[][])[0] ?? [];
+  const headerRow =
+    (parse(raw, { toLine: 1, bom: true, relax_column_count: true }) as string[][])[0] ?? [];
 
   // 记录保留的原始列名及其输出列名。
   const keptCols: { src: string; out: string }[] = [];

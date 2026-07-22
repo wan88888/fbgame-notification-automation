@@ -53,7 +53,10 @@ async function navigateViaMenu(page: Page, projectName: string, cfg: AppConfig):
       for (const aria of S.projectSwitcher.triggerAriaLabels) {
         const trigger = page.getByRole('button', { name: aria });
         if (await trigger.count()) {
-          await trigger.first().click({ timeout: t }).catch(() => undefined);
+          await trigger
+            .first()
+            .click({ timeout: t })
+            .catch(() => undefined);
           break;
         }
       }
@@ -146,9 +149,7 @@ async function enterUploadPage(
     }
   }
   // 否则尝试点击「Create from CSV」按钮进入上传区。
-  const createBtn = page
-    .getByText(S.createFromCsvText, { exact: false })
-    .first();
+  const createBtn = page.getByText(S.createFromCsvText, { exact: false }).first();
   if (await createBtn.count()) {
     log.step('点击 Create from CSV 进入上传区');
     await humanClick(page, createBtn, hz, timeoutMs);
@@ -310,15 +311,18 @@ async function selectSendTimeStrategy(
     await humanClick(page, trigger.first(), hz, timeoutMs);
   } else {
     // 兜底：点包含当前默认文案的元素。
-    await page.getByText(strategy, { exact: false }).first().click({ timeout: timeoutMs }).catch(() => undefined);
+    await page
+      .getByText(strategy, { exact: false })
+      .first()
+      .click({ timeout: timeoutMs })
+      .catch(() => undefined);
   }
 
   await think(hz);
 
   // 点选目标选项。
-  const option =
-    (await page.getByRole('option', { name: strategy, exact: true }).count())
-      ? page.getByRole('option', { name: strategy, exact: true })
-      : page.getByText(strategy, { exact: true });
+  const option = (await page.getByRole('option', { name: strategy, exact: true }).count())
+    ? page.getByRole('option', { name: strategy, exact: true })
+    : page.getByText(strategy, { exact: true });
   await humanClick(page, option.first(), hz, timeoutMs);
 }

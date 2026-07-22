@@ -1,12 +1,7 @@
 import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type {
-  GameJob,
-  GamesConfig,
-  NotificationsConfig,
-  ResolvedGameJob,
-} from './types.js';
+import type { GameJob, GamesConfig, NotificationsConfig, ResolvedGameJob } from './types.js';
 import { discoverCampaigns } from './campaigns.js';
 
 function env(key: string, fallback = ''): string {
@@ -50,6 +45,8 @@ export interface AppConfig {
     apiBase: string;
     apiKey: string;
     userId: string;
+    /** AdsPower 本地 API 单次请求超时（毫秒）。 */
+    timeoutMs: number;
   };
   metaAdminUrl: string;
   projectName: string;
@@ -62,6 +59,8 @@ export interface AppConfig {
   autoTurnOn: boolean;
   postUploadWaitMs: number;
   screenshotDir: string;
+  /** 运行日志落盘目录。 */
+  logDir: string;
   closeBrowserOnExit: boolean;
   /** 运行时开关（由命令行覆盖，见 cli.ts）。 */
   dryRun: boolean;
@@ -82,6 +81,7 @@ export function loadConfig(): AppConfig {
       apiBase: env('ADSPOWER_API_BASE', 'http://local.adspower.net:50325').replace(/\/+$/, ''),
       apiKey: env('ADSPOWER_API_KEY'),
       userId: env('ADSPOWER_USER_ID'),
+      timeoutMs: envInt('ADSPOWER_API_TIMEOUT_MS', 15000),
     },
     metaAdminUrl: env('META_ADMIN_URL', 'https://developers.facebook.com/apps/'),
     projectName: env('PROJECT_NAME'),
@@ -94,6 +94,7 @@ export function loadConfig(): AppConfig {
     autoTurnOn: envBool('AUTO_TURN_ON', true),
     postUploadWaitMs: envInt('POST_UPLOAD_WAIT_MS', 5000),
     screenshotDir: env('SCREENSHOT_DIR', './screenshots'),
+    logDir: env('LOG_DIR', './logs'),
     closeBrowserOnExit: envBool('CLOSE_BROWSER_ON_EXIT', false),
     dryRun: false,
     noUpload: false,
@@ -126,14 +127,16 @@ export function loadNotifications(path: string): NotificationsConfig {
   try {
     raw = readFileSync(abs, 'utf-8');
   } catch {
-    throw new Error(`无法读取推送配置文件: ${abs}（可参考 data/notifications.example.json 创建）。`);
+    throw new Error(
+      `无法读取推送配置文件: ${abs}（可参考 data/notifications.example.json 创建）。`,
+    );
   }
 
   let parsed: NotificationsConfig;
   try {
     parsed = JSON.parse(raw) as NotificationsConfig;
   } catch (e) {
-    throw new Error(`推送配置文件不是合法 JSON: ${abs}. ${(e as Error).message}`);
+    throw new Error(`推送配置文件不是合法 JSON: ${abs}. ${(e as Error).message}`, { cause: e });
   }
 
   if (!Array.isArray(parsed.notifications) || parsed.notifications.length === 0) {
@@ -180,7 +183,9 @@ function resolveFromGamesFile(gamesAbs: string): ResolvedGameJob[] {
   try {
     parsed = JSON.parse(readFileSync(gamesAbs, 'utf-8')) as GamesConfig;
   } catch (e) {
-    throw new Error(`games 配置文件不是合法 JSON: ${gamesAbs}. ${(e as Error).message}`);
+    throw new Error(`games 配置文件不是合法 JSON: ${gamesAbs}. ${(e as Error).message}`, {
+      cause: e,
+    });
   }
   if (!Array.isArray(parsed.games) || parsed.games.length === 0) {
     throw new Error(`games 配置文件中 games 为空: ${gamesAbs}`);
@@ -202,9 +207,12 @@ function resolveGameJob(g: GameJob, index: number): ResolvedGameJob {
     );
   }
   for (const [j, n] of notifications.entries()) {
-    if (!n.label) throw new Error(`games[${index}] (${g.projectName}) notifications[${j}] 缺少 label`);
+    if (!n.label)
+      throw new Error(`games[${index}] (${g.projectName}) notifications[${j}] 缺少 label`);
     if (!n.date)
-      throw new Error(`games[${index}] (${g.projectName}) notifications[${j}] (${n.label}) 缺少 date`);
+      throw new Error(
+        `games[${index}] (${g.projectName}) notifications[${j}] (${n.label}) 缺少 date`,
+      );
   }
   return { projectName: g.projectName, url: g.url, csv: g.csv, notifications };
 }

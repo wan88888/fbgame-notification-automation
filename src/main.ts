@@ -1,6 +1,7 @@
 import { loadConfig, resolveGames } from './config.js';
 import { parseCli, printHelp } from './cli.js';
-import { startBrowser, stopBrowser } from './adspower.js';
+import type { CliOptions } from './cli.js';
+import { startBrowser, stopBrowser, isActive } from './adspower.js';
 import { connectBrowser, getPage, screenshotOnError } from './playwright-utils.js';
 import {
   navigateToNotifications,
@@ -10,9 +11,9 @@ import {
 } from './steps.js';
 import type { AppConfig } from './config.js';
 import type { ResolvedGameJob } from './types.js';
-import { log } from './logger.js';
+import { log, initFileLogging, getLogFile } from './logger.js';
 import { pause } from './humanize.js';
-import { validateContentCsv, findSameDayConflicts } from './validate.js';
+import { validateContentCsv, findSameDayConflicts, validateScheduleDates } from './validate.js';
 import type { Page } from 'playwright';
 
 interface GameResult {
@@ -27,6 +28,20 @@ interface GameOutcome {
   result: GameResult;
   /** 本游戏实际尝试处理的条数（用于全局频率闸门计数）。 */
   attempted: number;
+}
+
+/**
+ * 提示某游戏排期里「同一天多条推送」的情况。
+ * Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败。
+ */
+function warnSameDayConflicts(game: ResolvedGameJob): void {
+  const conflicts = findSameDayConflicts(game.notifications);
+  for (const [date, labels] of conflicts) {
+    log.warn(
+      `[${game.projectName}] 同一天有多条推送（${date}）：${labels.join(', ')}。` +
+        `Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败，请分散到不同日期。`,
+    );
+  }
 }
 
 async function processGame(
@@ -46,6 +61,13 @@ async function processGame(
   log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
 
   try {
+    // 无论是否上传，日期都会在编辑阶段用到，先拦掉非法日期格式。
+    const dateErrors = validateScheduleDates(game.notifications);
+    if (dateErrors.length > 0) {
+      for (const err of dateErrors) log.error(`[${game.projectName}] 排期日期错误: ${err}`);
+      throw new Error(`排期日期格式非法（${dateErrors.length} 处），已跳过本游戏。`);
+    }
+
     // 上传前先校验内容表，尽早拦掉会导致「0 created」的数据问题。
     if (!cfg.noUpload) {
       const scheduleLabels = game.notifications.map((n) => n.label);
@@ -59,13 +81,7 @@ async function processGame(
     }
 
     // 同一天多条提醒（Meta 每天只允许 1 条 active Single Send）。
-    const conflicts = findSameDayConflicts(game.notifications);
-    for (const [date, labels] of conflicts) {
-      log.warn(
-        `[${game.projectName}] 同一天有多条推送（${date}）：${labels.join(', ')}。` +
-          `Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败，请分散到不同日期。`,
-      );
-    }
+    warnSameDayConflicts(game);
 
     await navigateToNotifications(page, game, cfg);
     if (cfg.noUpload) {
@@ -110,7 +126,11 @@ async function processGame(
 
     // 条与条之间的随机停顿（拟人化 / 降频）。
     if (i < items.length - 1) {
-      const ms = await pause(cfg.humanize, cfg.humanize.betweenItemsMinMs, cfg.humanize.betweenItemsMaxMs);
+      const ms = await pause(
+        cfg.humanize,
+        cfg.humanize.betweenItemsMinMs,
+        cfg.humanize.betweenItemsMaxMs,
+      );
       if (ms) log.info(`条间停顿 ${(ms / 1000).toFixed(1)}s ...`);
     }
   }
@@ -130,7 +150,9 @@ function printSummary(results: GameResult[]): boolean {
     }
     if (r.failedLabels.length) {
       hasFailure = true;
-      log.warn(`△ ${r.projectName}: 成功 ${r.succeeded}/${r.total}，失败 ${r.failedLabels.length} 条`);
+      log.warn(
+        `△ ${r.projectName}: 成功 ${r.succeeded}/${r.total}，失败 ${r.failedLabels.length} 条`,
+      );
       for (const f of r.failedLabels) log.warn(`    - ${f.label}: ${f.error}`);
     } else {
       log.ok(`✔ ${r.projectName}: 成功 ${r.succeeded}/${r.total}`);
@@ -147,18 +169,14 @@ function validateAllContent(games: ResolvedGameJob[]): boolean {
   for (const game of games) {
     const scheduleLabels = game.notifications.map((n) => n.label);
     const vr = validateContentCsv(game.csv, scheduleLabels);
+    const dateErrors = validateScheduleDates(game.notifications);
     for (const w of vr.warnings) log.warn(`[${game.projectName}] 提示: ${w}`);
-    const conflicts = findSameDayConflicts(game.notifications);
-    for (const [date, labels] of conflicts) {
-      log.warn(
-        `[${game.projectName}] 同一天有多条推送（${date}）：${labels.join(', ')}。` +
-          `Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败，请分散到不同日期。`,
-      );
-    }
-    if (vr.errors.length > 0) {
+    warnSameDayConflicts(game);
+    const allErrors = [...vr.errors, ...dateErrors];
+    if (allErrors.length > 0) {
       allOk = false;
-      log.error(`✖ ${game.projectName}: ${vr.errors.length} 个错误`);
-      for (const err of vr.errors) log.error(`    - ${err}`);
+      log.error(`✖ ${game.projectName}: ${allErrors.length} 个错误`);
+      for (const err of allErrors) log.error(`    - ${err}`);
     } else {
       log.ok(`✔ ${game.projectName}: 通过（${vr.rowCount} 行）`);
     }
@@ -167,20 +185,19 @@ function validateAllContent(games: ResolvedGameJob[]): boolean {
   return allOk;
 }
 
-async function run(): Promise<void> {
-  const opts = parseCli();
-  if (opts.help) {
-    printHelp();
-    return;
-  }
-
-  const cfg = loadConfig();
-  // 应用命令行覆盖。
+/** 把命令行选项覆盖到配置上（dry-run / no-upload / use-open-page / turn-on 开关）。 */
+function applyCliOverrides(cfg: AppConfig, opts: CliOptions): void {
   cfg.dryRun = opts.dryRun;
   cfg.noUpload = opts.noUpload;
   if (opts.useOpenPage) cfg.useOpenPage = true;
   if (opts.dryRun || opts.noTurnOn) cfg.autoTurnOn = false;
+}
 
+/**
+ * 解析并筛选本次要处理的游戏列表：
+ * 数据来源解析 -> --game 过滤 -> --limit 截断 -> --use-open-page 单游戏限制。
+ */
+function selectGames(cfg: AppConfig, opts: CliOptions): ResolvedGameJob[] {
   let games = resolveGames(cfg);
 
   // --game 过滤（按 projectName，不区分大小写、去除首尾空格）。
@@ -206,20 +223,28 @@ async function run(): Promise<void> {
     games = games.slice(0, 1);
   }
 
-  // --validate-only：只校验内容表，不启动浏览器。
-  if (opts.validateOnly) {
-    const ok = validateAllContent(games);
-    if (!ok) process.exitCode = 1;
-    return;
-  }
+  return games;
+}
 
-  if (cfg.dryRun) log.warn('*** DRY-RUN 模式：不会点击 Save，也不会 Turn On ***');
-  if (cfg.useOpenPage) log.warn('*** USE-OPEN-PAGE：跳过导航，直接使用当前标签页 ***');
-  log.info(`共 ${games.length} 个游戏待处理：${games.map((g) => g.projectName).join(', ')}`);
+/** 从 Meta 后台地址解析出主机名，用于优先接管命中该域名的标签页。 */
+function preferredHost(cfg: AppConfig): string | undefined {
+  try {
+    return new URL(cfg.metaAdminUrl).hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 启动 AdsPower 浏览器，按序处理所有游戏，返回每个游戏的结果。 */
+async function runAutomation(cfg: AppConfig, games: ResolvedGameJob[]): Promise<GameResult[]> {
+  // 启动前探活：已在运行则提示直接接管；顺带尽早暴露「客户端未开启」类问题。
+  if (await isActive(cfg.adspower)) {
+    log.info('检测到该 AdsPower profile 浏览器已在运行，将直接接管。');
+  }
 
   const wsEndpoint = await startBrowser(cfg.adspower);
   const browser = await connectBrowser(wsEndpoint, cfg.slowMoMs);
-  const page = await getPage(browser);
+  const page = await getPage(browser, preferredHost(cfg));
   page.setDefaultTimeout(cfg.stepTimeoutMs);
 
   const results: GameResult[] = [];
@@ -256,6 +281,37 @@ async function run(): Promise<void> {
       log.info('已断开 CDP 连接（AdsPower 浏览器保持开启）。');
     }
   }
+  return results;
+}
+
+async function run(): Promise<void> {
+  const opts = parseCli();
+  if (opts.help) {
+    printHelp();
+    return;
+  }
+
+  const cfg = loadConfig();
+  applyCliOverrides(cfg, opts);
+
+  initFileLogging(cfg.logDir);
+  const logFile = getLogFile();
+  if (logFile) log.info(`运行日志将写入: ${logFile}`);
+
+  const games = selectGames(cfg, opts);
+
+  // --validate-only：只校验内容表，不启动浏览器。
+  if (opts.validateOnly) {
+    const ok = validateAllContent(games);
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+
+  if (cfg.dryRun) log.warn('*** DRY-RUN 模式：不会点击 Save，也不会 Turn On ***');
+  if (cfg.useOpenPage) log.warn('*** USE-OPEN-PAGE：跳过导航，直接使用当前标签页 ***');
+  log.info(`共 ${games.length} 个游戏待处理：${games.map((g) => g.projectName).join(', ')}`);
+
+  const results = await runAutomation(cfg, games);
 
   const hasFailure = printSummary(results);
   if (hasFailure) process.exitCode = 1;

@@ -7,7 +7,7 @@ flowchart TD
     F -->|有| G[人：按提示修正<br/>回到对应步骤]
     G --> E
     F -->|没有| H[人：确认 AdsPower 已开且已登录 Meta]
-    H --> I[机：双击 run.command 或 npm start<br/>自动上传/编辑/Save/Turn On]
+    H --> I[机：./run.sh 或 npm start<br/>自动上传/编辑/Save/Turn On]
     I --> J[看窗口里的成功/失败汇总]
     J --> K{有失败?}
     K -->|有| L[看 screenshots + 对照报错表]

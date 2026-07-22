@@ -11,6 +11,7 @@ import {
 import type { AppConfig } from './config.js';
 import type { ResolvedGameJob } from './types.js';
 import { log } from './logger.js';
+import { pause } from './humanize.js';
 import type { Page } from 'playwright';
 
 interface GameResult {
@@ -21,15 +22,27 @@ interface GameResult {
   gameError?: string;
 }
 
-async function processGame(page: Page, game: ResolvedGameJob, cfg: AppConfig): Promise<GameResult> {
+interface GameOutcome {
+  result: GameResult;
+  /** 本游戏实际尝试处理的条数（用于全局频率闸门计数）。 */
+  attempted: number;
+}
+
+async function processGame(
+  page: Page,
+  game: ResolvedGameJob,
+  cfg: AppConfig,
+  budget: number,
+): Promise<GameOutcome> {
+  const items = game.notifications.slice(0, budget);
   const result: GameResult = {
     projectName: game.projectName,
-    total: game.notifications.length,
+    total: items.length,
     succeeded: 0,
     failedLabels: [],
   };
 
-  log.info(`===== 开始处理游戏「${game.projectName}」，共 ${result.total} 条推送 =====`);
+  log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
 
   try {
     await navigateToNotifications(page, game, cfg);
@@ -43,10 +56,11 @@ async function processGame(page: Page, game: ResolvedGameJob, cfg: AppConfig): P
     result.gameError = msg;
     log.error(`游戏「${game.projectName}」导航/上传阶段失败: ${msg}`);
     await screenshotOnError(page, cfg.screenshotDir, `game_${game.projectName}_setup`);
-    return result;
+    return { result, attempted: 0 };
   }
 
-  for (const notif of game.notifications) {
+  let attempted = 0;
+  for (const [i, notif] of items.entries()) {
     try {
       await editNotification(page, notif, cfg);
       if (cfg.autoTurnOn) {
@@ -61,10 +75,17 @@ async function processGame(page: Page, game: ResolvedGameJob, cfg: AppConfig): P
       // 关闭可能残留的编辑面板/菜单，继续下一条。
       await page.keyboard.press('Escape').catch(() => undefined);
     }
+    attempted += 1;
+
+    // 条与条之间的随机停顿（拟人化 / 降频）。
+    if (i < items.length - 1) {
+      const ms = await pause(cfg.humanize, cfg.humanize.betweenItemsMinMs, cfg.humanize.betweenItemsMaxMs);
+      if (ms) log.info(`条间停顿 ${(ms / 1000).toFixed(1)}s ...`);
+    }
   }
 
   log.ok(`游戏「${game.projectName}」完成：成功 ${result.succeeded}/${result.total}`);
-  return result;
+  return { result, attempted };
 }
 
 function printSummary(results: GameResult[]): boolean {
@@ -137,11 +158,30 @@ async function run(): Promise<void> {
   page.setDefaultTimeout(cfg.stepTimeoutMs);
 
   const results: GameResult[] = [];
+  let budget = cfg.maxItemsPerRun > 0 ? cfg.maxItemsPerRun : Number.POSITIVE_INFINITY;
+  if (Number.isFinite(budget)) {
+    log.warn(`频率闸门：本次运行最多处理 ${budget} 条推送（MAX_ITEMS_PER_RUN）。`);
+  }
   try {
-    for (const game of games) {
+    for (const [gi, game] of games.entries()) {
+      if (budget <= 0) {
+        log.warn('已达单次运行条数上限，停止处理后续游戏。');
+        break;
+      }
       // 单个游戏内部已容错，异常也不影响后续游戏。
-      const r = await processGame(page, game, cfg);
-      results.push(r);
+      const { result, attempted } = await processGame(page, game, cfg, budget);
+      results.push(result);
+      budget -= attempted;
+
+      // 游戏与游戏之间的随机长停顿。
+      if (gi < games.length - 1 && budget > 0) {
+        const ms = await pause(
+          cfg.humanize,
+          cfg.humanize.betweenGamesMinMs,
+          cfg.humanize.betweenGamesMaxMs,
+        );
+        if (ms) log.info(`游戏间停顿 ${(ms / 1000).toFixed(1)}s ...`);
+      }
     }
   } finally {
     await browser.close().catch(() => undefined);

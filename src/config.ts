@@ -27,6 +27,24 @@ function envBool(key: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(v.trim());
 }
 
+/** 拟人化行为配置（让操作节奏接近真人，降低自动化检测风险）。 */
+export interface HumanizeConfig {
+  /** 总开关。 */
+  enabled: boolean;
+  /** 步骤之间的随机「思考」停顿区间（毫秒）。 */
+  thinkMinMs: number;
+  thinkMaxMs: number;
+  /** 逐字符键入时每个字符的随机间隔（毫秒）。 */
+  typeMinMs: number;
+  typeMaxMs: number;
+  /** 每条推送处理之间的随机停顿区间（毫秒）。 */
+  betweenItemsMinMs: number;
+  betweenItemsMaxMs: number;
+  /** 每个游戏之间的随机停顿区间（毫秒）。 */
+  betweenGamesMinMs: number;
+  betweenGamesMaxMs: number;
+}
+
 export interface AppConfig {
   adspower: {
     apiBase: string;
@@ -52,6 +70,10 @@ export interface AppConfig {
   useOpenPage: boolean;
   /** 单游戏兜底模式下，Send notifications 页的直达 URL（可选）。 */
   notificationsUrl: string;
+  /** 拟人化行为配置。 */
+  humanize: HumanizeConfig;
+  /** 单次运行最多处理多少条推送（跨所有游戏累计）。0 表示不限制。频率闸门。 */
+  maxItemsPerRun: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -77,6 +99,18 @@ export function loadConfig(): AppConfig {
     noUpload: false,
     useOpenPage: envBool('USE_OPEN_PAGE', false),
     notificationsUrl: env('NOTIFICATIONS_URL'),
+    humanize: {
+      enabled: envBool('HUMANIZE', true),
+      thinkMinMs: envInt('THINK_MIN_MS', 600),
+      thinkMaxMs: envInt('THINK_MAX_MS', 2200),
+      typeMinMs: envInt('TYPE_MIN_MS', 60),
+      typeMaxMs: envInt('TYPE_MAX_MS', 180),
+      betweenItemsMinMs: envInt('BETWEEN_ITEMS_MIN_MS', 4000),
+      betweenItemsMaxMs: envInt('BETWEEN_ITEMS_MAX_MS', 12000),
+      betweenGamesMinMs: envInt('BETWEEN_GAMES_MIN_MS', 15000),
+      betweenGamesMaxMs: envInt('BETWEEN_GAMES_MAX_MS', 45000),
+    },
+    maxItemsPerRun: envInt('MAX_ITEMS_PER_RUN', 0),
   };
 
   if (!cfg.adspower.userId) {

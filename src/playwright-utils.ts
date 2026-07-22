@@ -3,6 +3,21 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { selectors } from './selectors.js';
 import { log } from './logger.js';
+import type { HumanizeConfig } from './config.js';
+import { humanClick } from './humanize.js';
+
+/** 未启用拟人化时的兜底配置。 */
+const NO_HUMANIZE: HumanizeConfig = {
+  enabled: false,
+  thinkMinMs: 0,
+  thinkMaxMs: 0,
+  typeMinMs: 0,
+  typeMaxMs: 0,
+  betweenItemsMinMs: 0,
+  betweenItemsMaxMs: 0,
+  betweenGamesMinMs: 0,
+  betweenGamesMaxMs: 0,
+};
 
 /** 接管 AdsPower 已启动的浏览器（CDP）。 */
 export async function connectBrowser(wsEndpoint: string, slowMoMs: number): Promise<Browser> {
@@ -64,9 +79,13 @@ export function findRow(page: Page, label: string): Locator {
 
 /**
  * 点击某条推送行末尾的「...」菜单按钮，多策略兜底。
- * 返回是否成功点开。
  */
-export async function openRowMenu(page: Page, label: string, timeoutMs: number): Promise<void> {
+export async function openRowMenu(
+  page: Page,
+  label: string,
+  timeoutMs: number,
+  hz: HumanizeConfig = NO_HUMANIZE,
+): Promise<void> {
   const labelNode = page.getByText(label, { exact: true }).first();
   await labelNode.waitFor({ state: 'visible', timeout: timeoutMs });
 
@@ -75,7 +94,7 @@ export async function openRowMenu(page: Page, label: string, timeoutMs: number):
   if (await row.count()) {
     const btn = row.getByRole('button').last();
     if (await btn.count()) {
-      await btn.click({ timeout: timeoutMs });
+      await humanClick(page, btn, hz, timeoutMs);
       return;
     }
   }
@@ -86,7 +105,7 @@ export async function openRowMenu(page: Page, label: string, timeoutMs: number):
     .getByRole('button')
     .last();
   if (await ancestorBtn.count()) {
-    await ancestorBtn.click({ timeout: timeoutMs });
+    await humanClick(page, ancestorBtn, hz, timeoutMs);
     return;
   }
 
@@ -94,7 +113,7 @@ export async function openRowMenu(page: Page, label: string, timeoutMs: number):
   for (const aria of selectors.rowMenu.ariaLabels) {
     const byAria = page.getByRole('button', { name: aria });
     if (await byAria.count()) {
-      await byAria.first().click({ timeout: timeoutMs });
+      await humanClick(page, byAria.first(), hz, timeoutMs);
       return;
     }
   }
@@ -106,7 +125,12 @@ export async function openRowMenu(page: Page, label: string, timeoutMs: number):
 }
 
 /** 点击一个可见文本（按钮 / 菜单项 / 链接），带兜底。 */
-export async function clickByText(page: Page, text: string, timeoutMs: number): Promise<void> {
+export async function clickByText(
+  page: Page,
+  text: string,
+  timeoutMs: number,
+  hz: HumanizeConfig = NO_HUMANIZE,
+): Promise<void> {
   // 优先按 role=button/menuitem/link，最后退回纯文本。
   const candidates: Locator[] = [
     page.getByRole('menuitem', { name: text, exact: true }),
@@ -116,7 +140,7 @@ export async function clickByText(page: Page, text: string, timeoutMs: number): 
   ];
   for (const loc of candidates) {
     if (await loc.count()) {
-      await loc.first().click({ timeout: timeoutMs });
+      await humanClick(page, loc.first(), hz, timeoutMs);
       return;
     }
   }

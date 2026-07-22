@@ -6,6 +6,7 @@ import type { NotificationSchedule, ResolvedGameJob } from './types.js';
 import { selectors as S } from './selectors.js';
 import { log } from './logger.js';
 import { clickByText, openRowMenu, toUsDate } from './playwright-utils.js';
+import { humanClick, humanType, think } from './humanize.js';
 
 /**
  * 步骤 1：抵达某游戏的 User Notifications 列表页。按优先级三种方式：
@@ -64,10 +65,11 @@ async function navigateViaMenu(page: Page, projectName: string, cfg: AppConfig):
   }
 
   log.step('进入 Use Cases');
-  await clickByText(page, S.useCasesText, t);
+  await clickByText(page, S.useCasesText, t, cfg.humanize);
+  await think(cfg.humanize);
 
   log.step('点击 Send players notifications');
-  await clickByText(page, S.sendNotificationsText, t);
+  await clickByText(page, S.sendNotificationsText, t, cfg.humanize);
 }
 
 /** 确认当前页面确实是 User Notifications 列表页。 */
@@ -94,9 +96,10 @@ export async function uploadCsv(page: Page, csvPath: string, cfg: AppConfig): Pr
   }
 
   log.step(`Create from CSV，上传: ${csvAbs}`);
+  await think(cfg.humanize);
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser', { timeout: t }),
-    clickByText(page, S.createFromCsvText, t),
+    clickByText(page, S.createFromCsvText, t, cfg.humanize),
   ]);
   await chooser.setFiles(csvAbs);
   log.ok('已提交 CSV 文件');
@@ -119,32 +122,34 @@ export async function editNotification(
   const usDate = toUsDate(notif.date);
 
   log.step(`[${notif.label}] 打开行菜单 -> View/Edit`);
-  await openRowMenu(page, notif.label, t);
-  await clickByText(page, S.menuItems.viewEdit, t);
+  await openRowMenu(page, notif.label, t, cfg.humanize);
+  await think(cfg.humanize);
+  await clickByText(page, S.menuItems.viewEdit, t, cfg.humanize);
+  await think(cfg.humanize);
 
   // ---- 设置 Notification Date ----
   log.step(`[${notif.label}] 设置日期: ${usDate}`);
   const dateInput = await resolveDateInput(page);
-  await dateInput.click({ timeout: t });
-  await dateInput.fill('');
-  await dateInput.fill(usDate);
+  await humanType(page, dateInput, usDate, cfg.humanize, t);
   // 关闭可能弹出的日历浮层。
   await page.keyboard.press('Escape').catch(() => undefined);
+  await think(cfg.humanize);
 
   // ---- 设置 Send Time Strategy ----
   const strategy = notif.sendTimeStrategy ?? 'Predicted Best Time';
   log.step(`[${notif.label}] 选择发送策略: ${strategy}`);
-  await selectSendTimeStrategy(page, strategy, t);
+  await selectSendTimeStrategy(page, strategy, t, cfg);
+  await think(cfg.humanize);
 
   // ---- 保存 / dry-run 时改为 Cancel ----
   if (cfg.dryRun) {
     log.warn(`[${notif.label}] dry-run：跳过 Save，点击 Cancel 关闭编辑框（不改动数据）`);
-    await clickByText(page, S.editor.cancelText, t).catch(async () => {
+    await clickByText(page, S.editor.cancelText, t, cfg.humanize).catch(async () => {
       await page.keyboard.press('Escape').catch(() => undefined);
     });
   } else {
     log.step(`[${notif.label}] 点击 Save`);
-    await clickByText(page, S.editor.saveText, t);
+    await clickByText(page, S.editor.saveText, t, cfg.humanize);
   }
 
   // 等待编辑面板关闭 / 回到列表。
@@ -166,8 +171,9 @@ export async function turnOnNotification(
 ): Promise<void> {
   const t = cfg.stepTimeoutMs;
   log.step(`[${notif.label}] 打开行菜单 -> Turn On`);
-  await openRowMenu(page, notif.label, t);
-  await clickByText(page, S.menuItems.turnOn, t);
+  await openRowMenu(page, notif.label, t, cfg.humanize);
+  await think(cfg.humanize);
+  await clickByText(page, S.menuItems.turnOn, t, cfg.humanize);
   log.ok(`[${notif.label}] 已 Turn On`);
 }
 
@@ -192,7 +198,14 @@ async function resolveDateInput(page: Page): Promise<Locator> {
 }
 
 /** 选择「Send Time Strategy」下拉框中的目标选项。 */
-async function selectSendTimeStrategy(page: Page, strategy: string, timeoutMs: number): Promise<void> {
+async function selectSendTimeStrategy(
+  page: Page,
+  strategy: string,
+  timeoutMs: number,
+  cfg: AppConfig,
+): Promise<void> {
+  const hz = cfg.humanize;
+
   // 情况 A：原生 <select>。
   const label = page.getByText(S.editor.sendTimeStrategyLabelText, { exact: false }).first();
   const nativeSelect = label.locator('xpath=following::select[1]');
@@ -208,16 +221,18 @@ async function selectSendTimeStrategy(page: Page, strategy: string, timeoutMs: n
     'xpath=following::*[@role="combobox" or @role="button" or contains(@class,"select")][1]',
   );
   if (await trigger.count()) {
-    await trigger.first().click({ timeout: timeoutMs });
+    await humanClick(page, trigger.first(), hz, timeoutMs);
   } else {
     // 兜底：点包含当前默认文案的元素。
     await page.getByText(strategy, { exact: false }).first().click({ timeout: timeoutMs }).catch(() => undefined);
   }
+
+  await think(hz);
 
   // 点选目标选项。
   const option =
     (await page.getByRole('option', { name: strategy, exact: true }).count())
       ? page.getByRole('option', { name: strategy, exact: true })
       : page.getByText(strategy, { exact: true });
-  await option.first().click({ timeout: timeoutMs });
+  await humanClick(page, option.first(), hz, timeoutMs);
 }

@@ -148,7 +148,7 @@ export function loadNotifications(path: string): NotificationsConfig {
 
 /**
  * 解析出要处理的游戏任务列表，按优先级：
- *  1. campaigns 目录里「内容 CSV + 排期表」配对（运营主用，最省事）；
+ *  1. campaigns/content + campaigns/schedule 里「内容 CSV + 排期表」配对（运营主用，最省事）；
  *  2. games 配置文件（GAMES_CONFIG，进阶/手动）；
  *  3. .env 里的单游戏配置（PROJECT_NAME + NOTIFICATIONS_CONFIG + CSV_FILE）兜底。
  */

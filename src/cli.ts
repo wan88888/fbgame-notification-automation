@@ -12,6 +12,8 @@ export interface CliOptions {
   noTurnOn: boolean;
   /** 跳过导航，直接接管当前已打开的标签页（从 Create from CSV 开始）。 */
   useOpenPage: boolean;
+  /** 只校验内容表数据是否合格，不启动浏览器、不上传。 */
+  validateOnly: boolean;
   /** 打印帮助后退出。 */
   help: boolean;
 }
@@ -26,6 +28,7 @@ const HELP = `
   --no-upload         跳过 Create from CSV 上传（避免重复调试时反复批量创建）
   --no-turn-on        本次不执行 Turn On（覆盖 .env 的 AUTO_TURN_ON）
   --use-open-page     不做任何导航，直接接管当前已打开的标签页（从 Create from CSV 开始）
+  --validate-only     只校验 content/ 内容表数据是否合格，不启动浏览器、不上传
   -h, --help          显示本帮助
 
 示例：
@@ -47,6 +50,7 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
     noUpload: false,
     noTurnOn: false,
     useOpenPage: false,
+    validateOnly: false,
     help: false,
   };
 
@@ -77,6 +81,9 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
         break;
       case '--use-open-page':
         opts.useOpenPage = true;
+        break;
+      case '--validate-only':
+        opts.validateOnly = true;
         break;
       case '-h':
       case '--help':

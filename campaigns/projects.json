@@ -1,6 +1,37 @@
 {
-  "_说明": "可选映射：\"CSV文件名(不含.csv)\": 值。值可以是两种写法：",
+  "_说明": "可选映射：键 = content/ 下 CSV 文件名(不含.csv)。值可以是两种写法：",
   "_写法1_只映射显示名": "\"AHA\": \"AHA 游戏显示名\"",
   "_写法2_直达URL最稳最快": "\"AHA\": { \"name\": \"AHA\", \"url\": \"https://developers.facebook.com/apps/APP_ID/....\" }",
-  "AHA": { "name": "AHA", "url": "" }
+  "AHA": {
+    "name": "AHA",
+    "url": "https://developers.facebook.com/apps/696007096453320/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Newford City": {
+    "name": "Newford City",
+    "url": "https://developers.facebook.com/apps/789422247367413/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Arrow Jam": {
+    "name": "Arrow Jam",
+    "url": "https://developers.facebook.com/apps/917168621016707/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Funnybay Survival": {
+    "name": "Funnybay Survival",
+    "url": "https://developers.facebook.com/apps/1175868677978320/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Home Design Miss Riley": {
+    "name": "Home Design: Miss Riley",
+    "url": "https://developers.facebook.com/apps/695236792921542/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Bubble pop shooter": {
+    "name": "Bubble pop shooter",
+    "url": "https://developers.facebook.com/apps/959198313032254/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "Bubble Candy": {
+    "name": "Bubble Candy",
+    "url": "https://developers.facebook.com/apps/1300655087703179/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  },
+  "PlotPlay": {
+    "name": "PlotPlay",
+    "url": "https://developers.facebook.com/apps/1315674136203265/use_cases/customize/user_notifications/?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643&selected_tab=user_notifications&product_route=instant-games"
+  }
 }

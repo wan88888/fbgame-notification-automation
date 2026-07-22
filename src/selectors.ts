@@ -28,8 +28,27 @@ export const selectors = {
   /** 通知列表页标识文本，用于确认已进入正确页面。 */
   notificationsPageHeadingText: 'User Notifications',
 
-  /** 「Create from CSV」按钮。点击后会触发文件选择。 */
+  /**
+   * 批量上传入口文本（新旧 UI 都兼容）。
+   * 当前页多为虚线上传区 +「Create notifications in batch from CSV」，
+   * 旧版可能是「Create from CSV」按钮。
+   */
   createFromCsvText: 'Create from CSV',
+  createFromCsvTexts: [
+    'Create from CSV',
+    'Create notifications in batch from CSV',
+    'Upload csv file in the correct format',
+  ],
+
+  /**
+   * 虚线上传区里真正触发系统文件选择框的链接/文字。
+   * 截图为「Or choose file on your device」（点击后弹出文件框）。
+   */
+  chooseFileTexts: [
+    'choose file on your device',
+    'choose file',
+    'Drag and drop your file',
+  ],
 
   /** 行内「...」菜单按钮的候选定位（每行末尾的三个点）。 */
   rowMenu: {

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import type { NotificationSchedule } from './types.js';
+import { log } from './logger.js';
 
 /** 排期表里可识别的列名（大小写、空格、下划线均不敏感）。 */
 const LABEL_KEYS = ['label', 'labels', '文案', '文案label', 'name'];
@@ -68,18 +69,18 @@ export function parseScheduleSheet(path: string): NotificationSchedule[] {
     const date = pick(row, DATE_KEYS);
     const strategy = pick(row, STRATEGY_KEYS);
 
-    // 跳过完全空行。
+    // 跳过完全空行；日期未填的行先跳过（方便运营逐步填排期）。
     if (!label && !date) continue;
     if (!label) throw new Error(`排期表 ${abs} 第 ${i + 2} 行缺少 label 列`);
-    if (!date) throw new Error(`排期表 ${abs} 第 ${i + 2} 行 (${label}) 缺少 date 列`);
+    if (!date) {
+      log.warn(`排期表 ${abs} 第 ${i + 2} 行 (${label}) 未填 date，已跳过`);
+      continue;
+    }
 
     result.push(
       strategy ? { label, date, sendTimeStrategy: strategy } : { label, date },
     );
   }
 
-  if (result.length === 0) {
-    throw new Error(`排期表为空（没有有效行）: ${abs}`);
-  }
   return result;
 }

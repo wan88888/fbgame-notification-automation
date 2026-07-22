@@ -37,7 +37,7 @@ fi
 
 # 4. 提示当前将处理的 campaigns
 echo "▶ 将处理 campaigns/ 目录下的推送配置..."
-echo "  （每个游戏需要一对文件：<游戏>.csv 内容表 + <游戏>.schedule.csv 排期表）"
+echo "  （content/<游戏>.csv 内容表 + schedule/<游戏>.schedule.csv 排期表）"
 echo ""
 
 # 5. 运行

@@ -12,6 +12,7 @@ import type { AppConfig } from './config.js';
 import type { ResolvedGameJob } from './types.js';
 import { log } from './logger.js';
 import { pause } from './humanize.js';
+import { validateContentCsv, findSameDayConflicts } from './validate.js';
 import type { Page } from 'playwright';
 
 interface GameResult {
@@ -45,6 +46,27 @@ async function processGame(
   log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
 
   try {
+    // 上传前先校验内容表，尽早拦掉会导致「0 created」的数据问题。
+    if (!cfg.noUpload) {
+      const scheduleLabels = game.notifications.map((n) => n.label);
+      const vr = validateContentCsv(game.csv, scheduleLabels);
+      for (const w of vr.warnings) log.warn(`[${game.projectName}] 内容表提示: ${w}`);
+      if (vr.errors.length > 0) {
+        for (const err of vr.errors) log.error(`[${game.projectName}] 内容表错误: ${err}`);
+        throw new Error(`内容表校验未通过（${vr.errors.length} 个错误），已跳过上传。`);
+      }
+      log.ok(`[${game.projectName}] 内容表校验通过（${vr.rowCount} 行）。`);
+    }
+
+    // 同一天多条提醒（Meta 每天只允许 1 条 active Single Send）。
+    const conflicts = findSameDayConflicts(game.notifications);
+    for (const [date, labels] of conflicts) {
+      log.warn(
+        `[${game.projectName}] 同一天有多条推送（${date}）：${labels.join(', ')}。` +
+          `Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败，请分散到不同日期。`,
+      );
+    }
+
     await navigateToNotifications(page, game, cfg);
     if (cfg.noUpload) {
       log.warn(`游戏「${game.projectName}」--no-upload：跳过 Create from CSV 上传`);
@@ -109,6 +131,33 @@ function printSummary(results: GameResult[]): boolean {
   return hasFailure;
 }
 
+/** 仅校验所有游戏的内容表，打印汇总。返回是否全部通过。 */
+function validateAllContent(games: ResolvedGameJob[]): boolean {
+  log.info('================= 内容表校验 =================');
+  let allOk = true;
+  for (const game of games) {
+    const scheduleLabels = game.notifications.map((n) => n.label);
+    const vr = validateContentCsv(game.csv, scheduleLabels);
+    for (const w of vr.warnings) log.warn(`[${game.projectName}] 提示: ${w}`);
+    const conflicts = findSameDayConflicts(game.notifications);
+    for (const [date, labels] of conflicts) {
+      log.warn(
+        `[${game.projectName}] 同一天有多条推送（${date}）：${labels.join(', ')}。` +
+          `Meta 每天只允许 1 条 active Single Send，多出的在 Save 时会失败，请分散到不同日期。`,
+      );
+    }
+    if (vr.errors.length > 0) {
+      allOk = false;
+      log.error(`✖ ${game.projectName}: ${vr.errors.length} 个错误`);
+      for (const err of vr.errors) log.error(`    - ${err}`);
+    } else {
+      log.ok(`✔ ${game.projectName}: 通过（${vr.rowCount} 行）`);
+    }
+  }
+  log.info('=============================================');
+  return allOk;
+}
+
 async function run(): Promise<void> {
   const opts = parseCli();
   if (opts.help) {
@@ -146,6 +195,13 @@ async function run(): Promise<void> {
         `（如需批量，请改用每游戏固定 URL 或默认导航模式。）`,
     );
     games = games.slice(0, 1);
+  }
+
+  // --validate-only：只校验内容表，不启动浏览器。
+  if (opts.validateOnly) {
+    const ok = validateAllContent(games);
+    if (!ok) process.exitCode = 1;
+    return;
   }
 
   if (cfg.dryRun) log.warn('*** DRY-RUN 模式：不会点击 Save，也不会 Turn On ***');

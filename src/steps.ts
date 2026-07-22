@@ -75,18 +75,28 @@ async function navigateViaMenu(page: Page, projectName: string, cfg: AppConfig):
 /** 确认当前页面确实是 User Notifications 列表页。 */
 async function ensureOnNotificationsPage(page: Page, timeoutMs: number): Promise<void> {
   const heading = page.getByText(S.notificationsPageHeadingText, { exact: false }).first();
-  const createBtn = page.getByText(S.createFromCsvText, { exact: false }).first();
   try {
     await heading.waitFor({ state: 'visible', timeout: timeoutMs });
+    return;
   } catch {
-    // 有些页面不显示 "User Notifications" 标题，用 Create from CSV 按钮兜底确认。
-    await createBtn.waitFor({ state: 'visible', timeout: timeoutMs });
+    // 标题找不到时，用上传区相关文案兜底确认。
   }
+  for (const text of S.createFromCsvTexts) {
+    const loc = page.getByText(text, { exact: false }).first();
+    if (await loc.count()) {
+      await loc.waitFor({ state: 'visible', timeout: timeoutMs });
+      return;
+    }
+  }
+  throw new Error(
+    `无法确认已在 User Notifications 页（未找到「${S.notificationsPageHeadingText}」或上传入口文案）。`,
+  );
 }
 
 /**
- * 步骤 2：Create from CSV 批量创建。
- * 点击按钮触发文件选择，上传 CSV，然后等待批量创建完成。
+ * 步骤 2：从 CSV 批量创建。
+ * 优先直接给 input[type=file] 赋值（适配虚线上传区）；
+ * 否则再尝试点击入口文案触发系统文件选择框。
  */
 export async function uploadCsv(page: Page, csvPath: string, cfg: AppConfig): Promise<void> {
   const t = cfg.stepTimeoutMs;
@@ -97,17 +107,85 @@ export async function uploadCsv(page: Page, csvPath: string, cfg: AppConfig): Pr
 
   log.step(`Create from CSV，上传: ${csvAbs}`);
   await think(cfg.humanize);
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: t }),
-    clickByText(page, S.createFromCsvText, t, cfg.humanize),
-  ]);
-  await chooser.setFiles(csvAbs);
-  log.ok('已提交 CSV 文件');
+
+  // 若还停在列表页，先点「Create from CSV」进入虚线上传区页面。
+  await enterUploadPage(page, t, cfg.humanize);
+
+  // 优先：隐藏的 input[type=file] 直接赋值（最稳，且不触发系统文件框）。
+  const fileInput = page.locator('input[type="file"]').first();
+  if (await fileInput.count()) {
+    await fileInput.setInputFiles(csvAbs);
+    log.ok('已通过 input[type=file] 提交 CSV 文件');
+  } else {
+    // 兜底：点击「Or choose file on your device」触发系统文件选择框。
+    log.info('未找到 input[type=file]，点击上传区链接触发文件选择框');
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: t }),
+      clickChooseFile(page, t, cfg.humanize),
+    ]);
+    await chooser.setFiles(csvAbs);
+    log.ok('已通过文件选择框提交 CSV 文件');
+  }
 
   if (cfg.postUploadWaitMs > 0) {
     log.info(`等待批量创建完成 (${cfg.postUploadWaitMs}ms) ...`);
     await page.waitForTimeout(cfg.postUploadWaitMs);
   }
+}
+
+/** 若尚未进入虚线上传区页面，则点击「Create from CSV」进入。 */
+async function enterUploadPage(
+  page: Page,
+  timeoutMs: number,
+  hz: AppConfig['humanize'],
+): Promise<void> {
+  // 已能看到「choose file on your device」说明已在上传区页，直接返回。
+  for (const text of S.chooseFileTexts) {
+    if (await page.getByText(text, { exact: false }).first().count()) {
+      return;
+    }
+  }
+  // 否则尝试点击「Create from CSV」按钮进入上传区。
+  const createBtn = page
+    .getByText(S.createFromCsvText, { exact: false })
+    .first();
+  if (await createBtn.count()) {
+    log.step('点击 Create from CSV 进入上传区');
+    await humanClick(page, createBtn, hz, timeoutMs);
+    await think(hz);
+    await page
+      .getByText(S.chooseFileTexts[0], { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: timeoutMs })
+      .catch(() => undefined);
+  }
+}
+
+/** 点击虚线上传区里的「Or choose file on your device」链接。 */
+async function clickChooseFile(
+  page: Page,
+  timeoutMs: number,
+  hz: AppConfig['humanize'],
+): Promise<void> {
+  for (const text of S.chooseFileTexts) {
+    const loc = page.getByText(text, { exact: false }).first();
+    if (await loc.count()) {
+      await humanClick(page, loc, hz, timeoutMs);
+      return;
+    }
+  }
+  // 最后兜底：点整块虚线区域。
+  const dropzone = page
+    .locator('div')
+    .filter({ hasText: /drag and drop your file/i })
+    .last();
+  if (await dropzone.count()) {
+    await humanClick(page, dropzone, hz, timeoutMs);
+    return;
+  }
+  throw new Error(
+    `未找到上传区的「choose file on your device」链接。请对照页面调整 src/selectors.ts 的 chooseFileTexts。`,
+  );
 }
 
 /**

@@ -8,5 +8,7 @@ data/*.csv
 !data/notifications.example.csv
 
 # 运营真实投放文件不入库，仅保留示例
-campaigns/*.csv
-!campaigns/*.example*.csv
+campaigns/content/*.csv
+!campaigns/content/*.example*.csv
+campaigns/schedule/*.csv
+!campaigns/schedule/*.example*.csv

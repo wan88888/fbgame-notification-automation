@@ -9,12 +9,12 @@
 
 ## 运营同事：三步搞定（推荐）
 
-1. 把这个游戏的**两份文件**放进 `campaigns/` 目录：
-   - `<游戏>.csv`：原样要上传到 Meta 的内容表（如 `AHA.csv`）；
-   - `<游戏>.schedule.csv`：排期表，告诉工具每条用哪天、什么发送策略
-     （列：`label,date,send_time_strategy`）。
-2. 双击项目根目录的 **`run.command`**。
-3. 看窗口里的成功/失败汇总即可；出错会在 `screenshots/` 留截图。
+1. 把内容表放进 `campaigns/content/<游戏>.csv`（如 `content/AHA.csv`）。
+2. 运行 `npm run gen-schedule`：自动从内容表的 `label` 生成
+   `schedule/<游戏>.schedule.csv`（策略固定为 Predicted Best Time），**只需手填 `date` 列**。
+3. 可选：`npm run validate` 检查内容表是否合格。
+4. 双击项目根目录的 **`run.command`**（或 `npm start`）。
+5. 看窗口里的成功/失败汇总即可；出错会在 `screenshots/` 留截图。
 
 > 多个游戏就放多对文件，一次运行全部处理完。首次双击会自动装依赖、并生成
 > `.env` 提示你填 `ADSPOWER_USER_ID`（填完再双击一次）。
@@ -22,8 +22,8 @@
 
 ## 工作原理
 
-1. 从 `campaigns/` 自动发现「内容表 + 排期表」配对（文件名即游戏名，可用
-   `campaigns/projects.json` 映射到 Meta 项目显示名）。
+1. 从 `campaigns/content/` + `campaigns/schedule/` 按同名自动发现「内容表 + 排期表」
+   配对（文件名即游戏名，可用 `campaigns/projects.json` 映射到 Meta 项目显示名）。
 2. 通过 AdsPower 本地 API `/api/v1/browser/start` 启动指定 profile 的浏览器，
    拿到 CDP 端点 `data.ws.puppeteer`；Playwright 用 `chromium.connectOverCDP()` 接管。
 3. 逐个游戏执行：切项目 → Create from CSV 上传内容表 → 按排期表逐条
@@ -45,9 +45,9 @@ src/
   types.ts            类型定义
   logger.ts           日志
 campaigns/            ★ 运营放文件的地方（见 campaigns/README.md）
-  Sample.example.csv           内容表示例（不会被处理）
-  Sample.example.schedule.csv  排期表示例（不会被处理）
-  projects.json                可选：文件名 → Meta 项目显示名 映射
+  content/            内容表（如 AHA.csv）
+  schedule/           排期表（如 AHA.schedule.csv）
+  projects.json       可选：文件名 → Meta 项目显示名 / 直达 URL 映射
 run.command           运营双击运行入口（macOS）
 data/                 进阶/兜底用的手写配置示例
 ```
@@ -56,7 +56,7 @@ data/                 进阶/兜底用的手写配置示例
 
 工具按以下顺序决定要处理哪些游戏（满足前者就不看后者）：
 
-1. **`campaigns/` 目录**里的「内容表 + 排期表」配对 —— 运营主用。
+1. **`campaigns/content/` + `campaigns/schedule/`** 里的「内容表 + 排期表」配对 —— 运营主用。
 2. `data/games.json` —— 进阶，手写多游戏。
 3. `.env` 里的 `PROJECT_NAME` + `NOTIFICATIONS_CONFIG` + `CSV_FILE` —— 单游戏兜底。
 
@@ -75,7 +75,7 @@ cp .env.example .env
 - `ADSPOWER_API_KEY`：若在 AdsPower 里开启了 API 鉴权才需要。
 - 其余运行参数见文件内注释。
 
-配好后，日常使用就交给运营：往 `campaigns/` 放文件 + 双击 `run.command`。
+配好后，日常使用就交给运营：往 `campaigns/content/` 与 `campaigns/schedule/` 放文件 + 双击 `run.command`。
 （`run.command` 首次运行也会自动帮忙装依赖、生成 `.env`。）
 
 ## 进阶：手写多游戏配置（可选）

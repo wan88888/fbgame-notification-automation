@@ -50,6 +50,17 @@ export interface ResolvedGameJob {
   notifications: NotificationSchedule[];
 }
 
+/** 单个游戏一次批处理的结果汇总（供打印汇总与外部通知复用）。 */
+export interface GameResult {
+  projectName: string;
+  total: number;
+  succeeded: number;
+  failedLabels: { label: string; error: string }[];
+  gameError?: string;
+  /** --resume 下因已完成而整体跳过。 */
+  skipped?: boolean;
+}
+
 /**
  * projects.json 中每个条目，两种写法：
  *   - 字符串：仅映射 Meta 项目显示名，如 "AHA 游戏"。

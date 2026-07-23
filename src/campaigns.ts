@@ -10,6 +10,28 @@ const SCHEDULE_SUFFIX = '.schedule.csv';
 const PROJECT_MAP_FILE = 'projects.json';
 
 /**
+ * 运营导出的内容表默认带的文件名前缀（如「推送配置表 - AHA.csv」）。
+ * 推导游戏名时会剥掉它，得到真正的游戏名「AHA」，避免运营手工改名。
+ */
+export const DEFAULT_CONTENT_NAME_PREFIX = '推送配置表';
+
+/**
+ * 从内容表文件名（不含扩展名）推导游戏名 / 项目键。
+ * 若以 prefix 开头，则剥掉该前缀及紧随其后的分隔符（空格 / - / – / — / : / ：）。
+ * 不匹配前缀时原样返回，保证「AHA.csv」这类老命名不受影响。
+ */
+export function deriveProjectKey(fileBase: string, prefix: string): string {
+  let name = fileBase.trim();
+  if (prefix && name.startsWith(prefix)) {
+    name = name
+      .slice(prefix.length)
+      .replace(/^[\s\-–—:：]+/, '')
+      .trim();
+  }
+  return name;
+}
+
+/**
  * User Notifications 页 URL 默认模板。各游戏这条 URL 只有 /apps/<APP_ID>/ 这段不同，
  * 因此 projects.json 里通常只需填 appId，其余由本模板补全（{appId} 占位符）。
  * 如个别游戏所属 business 不同，可在 projects.json 用整条 url 覆盖，或改本模板（NOTIFICATIONS_URL_TEMPLATE）。
@@ -74,6 +96,7 @@ function resolveProjectInfo(
 export function discoverCampaigns(
   dir: string,
   urlTemplate: string = DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
+  namePrefix: string = DEFAULT_CONTENT_NAME_PREFIX,
 ): ResolvedGameJob[] {
   const dirAbs = resolve(process.cwd(), dir);
   if (!existsSync(dirAbs)) return [];
@@ -94,7 +117,8 @@ export function discoverCampaigns(
 
   const jobs: ResolvedGameJob[] = [];
   for (const csv of contentCsvs.sort()) {
-    const name = basename(csv, '.csv');
+    // 游戏名剥掉运营导出的文件名前缀（如「推送配置表 - AHA.csv」→「AHA」）。
+    const name = deriveProjectKey(basename(csv, '.csv'), namePrefix);
     const scheduleFile = `${name}${SCHEDULE_SUFFIX}`;
     const scheduleAbs = join(scheduleDir, scheduleFile);
 

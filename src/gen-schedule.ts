@@ -21,11 +21,13 @@ import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
 import { csvEscape } from './csv-utils.js';
 import { defaultStartDate, generateDates, isValidDate, toIsoDate } from './date-utils.js';
+import { deriveProjectKey, DEFAULT_CONTENT_NAME_PREFIX } from './campaigns.js';
 
 const CONTENT_DIR = resolve(process.cwd(), 'campaigns/content');
 const SCHEDULE_DIR = resolve(process.cwd(), 'campaigns/schedule');
 const SCHEDULE_SUFFIX = '.schedule.csv';
 const DEFAULT_STRATEGY = 'Predicted Best Time';
+const NAME_PREFIX = process.env['CONTENT_NAME_PREFIX'] ?? DEFAULT_CONTENT_NAME_PREFIX;
 
 interface GenOptions {
   /** true 时保留已填日期、不自动生成（旧行为）。 */
@@ -162,7 +164,8 @@ function main(): void {
   let preservedDates = 0;
 
   for (const file of contentFiles) {
-    const name = basename(file, '.csv');
+    // 排期表名与「发现 campaign」一致：剥掉运营导出的文件名前缀。
+    const name = deriveProjectKey(basename(file, '.csv'), NAME_PREFIX);
     const contentPath = join(CONTENT_DIR, file);
     const schedulePath = join(SCHEDULE_DIR, `${name}${SCHEDULE_SUFFIX}`);
     const existed = existsSync(schedulePath);

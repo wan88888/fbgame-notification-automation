@@ -2,7 +2,12 @@ import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { GameJob, GamesConfig, NotificationsConfig, ResolvedGameJob } from './types.js';
-import { discoverCampaigns, DEFAULT_NOTIFICATIONS_URL_TEMPLATE } from './campaigns.js';
+import type { FeishuConfig } from './notify.js';
+import {
+  discoverCampaigns,
+  DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
+  DEFAULT_CONTENT_NAME_PREFIX,
+} from './campaigns.js';
 
 function env(key: string, fallback = ''): string {
   const v = process.env[key];
@@ -71,6 +76,8 @@ export interface AppConfig {
   notificationsUrl: string;
   /** campaigns 模式下用 appId 拼直达 URL 的模板（含 {appId} 占位符）。 */
   notificationsUrlTemplate: string;
+  /** 内容表文件名前缀（如「推送配置表 - AHA.csv」的「推送配置表」），推导游戏名时剥掉。 */
+  contentNamePrefix: string;
   /** 拟人化行为配置。 */
   humanize: HumanizeConfig;
   /** 单次运行最多处理多少条推送（跨所有游戏累计）。0 表示不限制。频率闸门。 */
@@ -86,6 +93,8 @@ export interface AppConfig {
   runStatePath: string;
   /** 断点续跑开关（由命令行 --resume 覆盖，见 cli.ts）。 */
   resume: boolean;
+  /** 飞书（Lark）运行结果通知配置。webhookUrl 留空则不通知。 */
+  feishu: FeishuConfig;
 }
 
 /** Meta 后台新建推送时 Send Time Strategy 的默认值。 */
@@ -117,6 +126,7 @@ export function loadConfig(): AppConfig {
     useOpenPage: envBool('USE_OPEN_PAGE', false),
     notificationsUrl: env('NOTIFICATIONS_URL'),
     notificationsUrlTemplate: env('NOTIFICATIONS_URL_TEMPLATE', DEFAULT_NOTIFICATIONS_URL_TEMPLATE),
+    contentNamePrefix: env('CONTENT_NAME_PREFIX', DEFAULT_CONTENT_NAME_PREFIX),
     humanize: {
       enabled: envBool('HUMANIZE', true),
       thinkMinMs: envInt('THINK_MIN_MS', 600),
@@ -132,6 +142,11 @@ export function loadConfig(): AppConfig {
     alwaysSetStrategy: envBool('ALWAYS_SET_STRATEGY', false),
     runStatePath: env('RUN_STATE_PATH', './.run-state.json'),
     resume: false,
+    feishu: {
+      webhookUrl: env('FEISHU_WEBHOOK_URL'),
+      signSecret: env('FEISHU_SIGN_SECRET'),
+      timeoutMs: envInt('FEISHU_TIMEOUT_MS', 10000),
+    },
   };
 
   if (!cfg.adspower.userId) {
@@ -177,7 +192,11 @@ export function loadNotifications(path: string): NotificationsConfig {
  */
 export function resolveGames(cfg: AppConfig): ResolvedGameJob[] {
   // 1) campaigns 自动发现。
-  const campaigns = discoverCampaigns(cfg.campaignDir, cfg.notificationsUrlTemplate);
+  const campaigns = discoverCampaigns(
+    cfg.campaignDir,
+    cfg.notificationsUrlTemplate,
+    cfg.contentNamePrefix,
+  );
   if (campaigns.length > 0) return campaigns;
 
   // 2) games.json。

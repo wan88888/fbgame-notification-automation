@@ -11,23 +11,14 @@ import {
   deleteCompletedNotifications,
 } from './steps.js';
 import type { AppConfig } from './config.js';
-import type { ResolvedGameJob } from './types.js';
+import type { ResolvedGameJob, GameResult } from './types.js';
 import { log, initFileLogging, getLogFile } from './logger.js';
 import { pause } from './humanize.js';
 import { validateContentCsv, findSameDayConflicts, validateScheduleDates } from './validate.js';
 import { parseFlexibleDate, toIsoDate } from './date-utils.js';
 import { loadRunState, getGameProgress, markGameProgress, type RunState } from './run-state.js';
+import { notifyFeishu } from './notify.js';
 import type { Page } from 'playwright';
-
-interface GameResult {
-  projectName: string;
-  total: number;
-  succeeded: number;
-  failedLabels: { label: string; error: string }[];
-  gameError?: string;
-  /** --resume 下因已完成而整体跳过。 */
-  skipped?: boolean;
-}
 
 /** 传给 processGame 的续跑上下文。 */
 interface ResumeCtx {
@@ -411,10 +402,21 @@ async function run(): Promise<void> {
   if (cfg.useOpenPage) log.warn('*** USE-OPEN-PAGE：跳过导航，直接使用当前标签页 ***');
   log.info(`共 ${games.length} 个游戏待处理：${games.map((g) => g.projectName).join(', ')}`);
 
+  const startedAt = new Date();
   const results = await runAutomation(cfg, games);
 
   const hasFailure = printSummary(results);
   if (hasFailure) process.exitCode = 1;
+
+  // 运行结果推送飞书（未配置 webhook 时内部静默跳过，失败也不影响退出码）。
+  await notifyFeishu(cfg.feishu, {
+    results,
+    hasFailure,
+    logFile,
+    startedAt,
+    finishedAt: new Date(),
+    dryRun: cfg.dryRun,
+  });
 }
 
 run().catch((e) => {

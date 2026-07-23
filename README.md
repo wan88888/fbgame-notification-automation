@@ -265,6 +265,8 @@ Meta 后台是 React 应用，DOM 的 class 名混淆且不稳定，因此本项
 ## 行为说明
 
 - 逐条处理，单条失败会截图并记录，不中断其余条目；结束时汇总失败列表。
+- 配置 `FEISHU_WEBHOOK_URL` 后，运行结束会把汇总（成功/失败、失败明细、日志路径）
+  推送到飞书群；留空则不发，发送失败也只记告警、不影响退出码。详见运营指南。
 - `AUTO_TURN_ON=false` 可只做编辑、不自动 Turn On。
 - `CLOSE_BROWSER_ON_EXIT=false`（默认）运行结束只断开 CDP，不关闭 AdsPower
   浏览器，方便人工核对结果。

@@ -20,6 +20,11 @@ campaigns/
 > 去 Meta 后台切换到对应游戏项目。若后台里的项目显示名和文件名不一样，
 > 在本目录的 `projects.json` 里加一条映射即可。
 
+> **运营导出的文件名带前缀也没关系**：像 `推送配置表 - AHA.csv` 会被自动识别为游戏 `AHA`
+> （剥掉 `推送配置表` 前缀和分隔符），运营**无需手工改名**，直接放进 `content/` 即可。
+> 前缀可在 `.env` 的 `CONTENT_NAME_PREFIX` 调整（留空则不剥离）。生成的排期表也会用剥离后的名字，
+> 即 `schedule/AHA.schedule.csv`。
+
 ## projects.json（可选，强烈推荐配 URL）
 
 如果每个游戏的 Send players notifications 页面有**固定 URL**，在 `projects.json`

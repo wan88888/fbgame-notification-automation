@@ -14,6 +14,8 @@ export interface CliOptions {
   useOpenPage: boolean;
   /** 只校验内容表数据是否合格，不启动浏览器、不上传。 */
   validateOnly: boolean;
+  /** 断点续跑：跳过状态文件里已完成的游戏；已上传未完成的游戏不重复上传。 */
+  resume: boolean;
   /** 打印帮助后退出。 */
   help: boolean;
 }
@@ -29,6 +31,7 @@ const HELP = `
   --no-turn-on        本次不执行 Turn On（覆盖 .env 的 AUTO_TURN_ON）
   --use-open-page     不做任何导航，直接接管当前已打开的标签页（从 Create from CSV 开始）
   --validate-only     只校验 content/ 内容表数据是否合格，不启动浏览器、不上传
+  --resume            断点续跑：跳过已完成的游戏，已上传未完成的游戏不重复上传
   -h, --help          显示本帮助
 
 示例：
@@ -40,6 +43,9 @@ const HELP = `
 
   # CSV 已在上一轮调试中创建过，本轮只改日期+Turn On
   npm start -- --game "Game A" --no-upload
+
+  # 上一次跑到一半失败，续跑（已完成的游戏跳过，已上传的不重复上传）
+  npm start -- --resume
 `;
 
 export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
@@ -51,6 +57,7 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
     noTurnOn: false,
     useOpenPage: false,
     validateOnly: false,
+    resume: false,
     help: false,
   };
 
@@ -84,6 +91,9 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
         break;
       case '--validate-only':
         opts.validateOnly = true;
+        break;
+      case '--resume':
+        opts.resume = true;
         break;
       case '-h':
       case '--help':

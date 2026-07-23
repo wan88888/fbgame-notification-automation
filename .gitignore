@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 screenshots/
+# 断点续跑状态文件
+.run-state.json
 data/notifications.json
 data/*.csv
 !data/notifications.example.csv

@@ -10,6 +10,24 @@ const SCHEDULE_SUFFIX = '.schedule.csv';
 const PROJECT_MAP_FILE = 'projects.json';
 
 /**
+ * User Notifications 页 URL 默认模板。各游戏这条 URL 只有 /apps/<APP_ID>/ 这段不同，
+ * 因此 projects.json 里通常只需填 appId，其余由本模板补全（{appId} 占位符）。
+ * 如个别游戏所属 business 不同，可在 projects.json 用整条 url 覆盖，或改本模板（NOTIFICATIONS_URL_TEMPLATE）。
+ */
+export const DEFAULT_NOTIFICATIONS_URL_TEMPLATE =
+  'https://developers.facebook.com/apps/{appId}/use_cases/customize/user_notifications/' +
+  '?use_case_enum=INSTANT_GAMES_NOTIFICATION_SERVICE&business_id=644048981685643' +
+  '&selected_tab=user_notifications&product_route=instant-games';
+
+/** 用模板 + appId 拼出直达 URL；模板缺少 {appId} 占位符时抛错以尽早暴露配置问题。 */
+export function buildNotificationsUrl(template: string, appId: string): string {
+  if (!template.includes('{appId}')) {
+    throw new Error(`NOTIFICATIONS_URL_TEMPLATE 缺少 {appId} 占位符: ${template}`);
+  }
+  return template.replaceAll('{appId}', encodeURIComponent(appId));
+}
+
+/**
  * 读取可选的「文件名 -> 项目信息」映射。
  * 值可以是字符串（Meta 项目显示名），或对象 { name?, url? }。
  */
@@ -24,14 +42,22 @@ function loadProjectMap(dirAbs: string): Record<string, ProjectMapEntry> {
   }
 }
 
-/** 从映射条目解析出项目显示名与可选直达 URL。 */
+/**
+ * 从映射条目解析出项目显示名与可选直达 URL。
+ * URL 优先级：显式 url > 由 appId + 模板拼出 > 无（回退到菜单导航）。
+ */
 function resolveProjectInfo(
   name: string,
   entry: ProjectMapEntry | undefined,
+  urlTemplate: string,
 ): { projectName: string; url?: string } {
   if (entry === undefined) return { projectName: name };
   if (typeof entry === 'string') return { projectName: entry };
-  return { projectName: entry.name ?? name, url: entry.url };
+
+  const projectName = entry.name ?? name;
+  if (entry.url) return { projectName, url: entry.url };
+  if (entry.appId) return { projectName, url: buildNotificationsUrl(urlTemplate, entry.appId) };
+  return { projectName };
 }
 
 /**
@@ -45,7 +71,10 @@ function resolveProjectInfo(
  * 项目名优先取 projects.json 中 <name> 的映射，否则用文件名 <name>。
  * 返回空数组表示该目录下没有可处理的 campaign。
  */
-export function discoverCampaigns(dir: string): ResolvedGameJob[] {
+export function discoverCampaigns(
+  dir: string,
+  urlTemplate: string = DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
+): ResolvedGameJob[] {
   const dirAbs = resolve(process.cwd(), dir);
   if (!existsSync(dirAbs)) return [];
 
@@ -83,7 +112,7 @@ export function discoverCampaigns(dir: string): ResolvedGameJob[] {
       );
       continue;
     }
-    const { projectName, url } = resolveProjectInfo(name, projectMap[name]);
+    const { projectName, url } = resolveProjectInfo(name, projectMap[name], urlTemplate);
     jobs.push({ projectName, url, csv: join(contentDir, csv), notifications });
     log.info(
       `发现 campaign：${CONTENT_SUBDIR}/${csv} -> 项目「${projectName}」${url ? '（直达 URL）' : ''}，` +

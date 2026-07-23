@@ -50,8 +50,15 @@ export interface ResolvedGameJob {
   notifications: NotificationSchedule[];
 }
 
-/** projects.json 中每个条目：可以是「显示名」字符串，或含可选 url 的对象。 */
-export type ProjectMapEntry = string | { name?: string; url?: string };
+/**
+ * projects.json 中每个条目，两种写法：
+ *   - 字符串：仅映射 Meta 项目显示名，如 "AHA 游戏"。
+ *   - 对象：{ name?, appId?, url? }。
+ *     · appId：Meta App ID（各游戏 URL 只有 /apps/<id>/ 这段不同），最省事，
+ *       其余部分由 NOTIFICATIONS_URL_TEMPLATE 模板补全。
+ *     · url：整条直达 URL（优先级最高，用于个别 business_id 不同等特殊情况）。
+ */
+export type ProjectMapEntry = string | { name?: string; appId?: string; url?: string };
 
 /** AdsPower /api/v1/browser/start 返回结构。 */
 export interface AdsPowerStartResponse {

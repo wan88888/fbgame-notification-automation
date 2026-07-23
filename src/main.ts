@@ -8,12 +8,15 @@ import {
   uploadCsv,
   editNotification,
   turnOnNotification,
+  deleteCompletedNotifications,
 } from './steps.js';
 import type { AppConfig } from './config.js';
 import type { ResolvedGameJob } from './types.js';
 import { log, initFileLogging, getLogFile } from './logger.js';
 import { pause } from './humanize.js';
 import { validateContentCsv, findSameDayConflicts, validateScheduleDates } from './validate.js';
+import { parseFlexibleDate, toIsoDate } from './date-utils.js';
+import { loadRunState, getGameProgress, markGameProgress, type RunState } from './run-state.js';
 import type { Page } from 'playwright';
 
 interface GameResult {
@@ -22,12 +25,27 @@ interface GameResult {
   succeeded: number;
   failedLabels: { label: string; error: string }[];
   gameError?: string;
+  /** --resume 下因已完成而整体跳过。 */
+  skipped?: boolean;
+}
+
+/** 传给 processGame 的续跑上下文。 */
+interface ResumeCtx {
+  state: RunState;
+  path: string;
+  /** 本游戏已上传过，跳过 Create from CSV（避免重复批量创建）。 */
+  skipUpload: boolean;
 }
 
 interface GameOutcome {
   result: GameResult;
   /** 本游戏实际尝试处理的条数（用于全局频率闸门计数）。 */
   attempted: number;
+}
+
+/** 判断错误是否为「已达 10 条 active 上限」。 */
+function isActiveLimit(msg: string): boolean {
+  return msg.includes('ACTIVE_LIMIT') || /more than 10 active/i.test(msg);
 }
 
 /**
@@ -49,6 +67,7 @@ async function processGame(
   game: ResolvedGameJob,
   cfg: AppConfig,
   budget: number,
+  resume?: ResumeCtx,
 ): Promise<GameOutcome> {
   const items = game.notifications.slice(0, budget);
   const result: GameResult = {
@@ -57,6 +76,9 @@ async function processGame(
     succeeded: 0,
     failedLabels: [],
   };
+
+  // 本游戏是否跳过上传：命令行 --no-upload，或续跑时本游戏已上传过。
+  const skipUpload = cfg.noUpload || resume?.skipUpload === true;
 
   log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
 
@@ -69,7 +91,7 @@ async function processGame(
     }
 
     // 上传前先校验内容表，尽早拦掉会导致「0 created」的数据问题。
-    if (!cfg.noUpload) {
+    if (!skipUpload) {
       const scheduleLabels = game.notifications.map((n) => n.label);
       const vr = validateContentCsv(game.csv, scheduleLabels);
       for (const w of vr.warnings) log.warn(`[${game.projectName}] 内容表提示: ${w}`);
@@ -84,10 +106,13 @@ async function processGame(
     warnSameDayConflicts(game);
 
     await navigateToNotifications(page, game, cfg);
-    if (cfg.noUpload) {
-      log.warn(`游戏「${game.projectName}」--no-upload：跳过 Create from CSV 上传`);
+    if (skipUpload) {
+      const why = resume?.skipUpload ? '续跑：本游戏已上传过' : '--no-upload';
+      log.warn(`游戏「${game.projectName}」${why}：跳过 Create from CSV 上传`);
     } else {
       await uploadCsv(page, game.csv, cfg);
+      // 上传成功即落盘，避免中途失败后续跑重复批量创建。
+      if (resume) markGameProgress(resume.path, resume.state, game.projectName, { uploaded: true });
     }
   } catch (e) {
     const msg = (e as Error).message;
@@ -98,12 +123,29 @@ async function processGame(
   }
 
   let attempted = 0;
-  let skipTurnOn = false; // 本游戏命中 active 上限后置真，仅影响本游戏。
+  let skipTurnOn = false; // 本游戏命中 active 上限且无法腾位后置真，仅影响本游戏。
+  let cleanupTried = false; // 本游戏是否已尝试过删除 Completed 腾位（每游戏最多一次）。
   for (const [i, notif] of items.entries()) {
     try {
       await editNotification(page, notif, cfg);
       if (cfg.autoTurnOn && !skipTurnOn) {
-        await turnOnNotification(page, notif, cfg);
+        try {
+          await turnOnNotification(page, notif, cfg);
+        } catch (e) {
+          // 撞到 10 条 active 上限：删除 Completed 通知腾位后重试一次（每游戏只清理一次）。
+          if (!isActiveLimit((e as Error).message) || cleanupTried) throw e;
+          cleanupTried = true;
+          log.warn(`[${game.projectName}] 撞到 10 条 active 上限，尝试删除 Completed 通知腾位 ...`);
+          const deleted = await deleteCompletedNotifications(page, cfg);
+          if (deleted === 0) {
+            throw new Error(
+              'ACTIVE_LIMIT: 已达上限，且没有可删除的 Completed 通知，无法腾出空位。',
+              { cause: e },
+            );
+          }
+          // 腾位成功，重试当前条目的 Turn On（再失败则由外层捕获）。
+          await turnOnNotification(page, notif, cfg);
+        }
       }
       result.succeeded += 1;
     } catch (e) {
@@ -114,10 +156,10 @@ async function processGame(
       // 关闭可能残留的编辑面板/菜单，继续下一条。
       await page.keyboard.press('Escape').catch(() => undefined);
 
-      // 命中「10 条 active 上限」后，后续 Turn On 必然继续失败，本游戏剩余不再尝试 Turn On。
-      if (msg.includes('ACTIVE_LIMIT') || /more than 10 active/i.test(msg)) {
+      // 已达上限且无法腾位（无 Completed 可删），本游戏剩余不再尝试 Turn On。
+      if (isActiveLimit(msg)) {
         log.warn(
-          `[${game.projectName}] 已达 Meta 每 app 10 条 active 上限，跳过本游戏剩余条目的 Turn On（请先到后台清理 active 通知）。`,
+          `[${game.projectName}] 已达 Meta 每 app 10 条 active 上限且无法腾位，跳过本游戏剩余条目的 Turn On。`,
         );
         skipTurnOn = true;
       }
@@ -135,6 +177,11 @@ async function processGame(
     }
   }
 
+  // 全部成功（无失败条目）才标记 completed，供 --resume 整体跳过。
+  if (resume && result.failedLabels.length === 0) {
+    markGameProgress(resume.path, resume.state, game.projectName, { completed: true });
+  }
+
   log.ok(`游戏「${game.projectName}」完成：成功 ${result.succeeded}/${result.total}`);
   return { result, attempted };
 }
@@ -143,6 +190,10 @@ function printSummary(results: GameResult[]): boolean {
   let hasFailure = false;
   log.info('================= 批处理汇总 =================');
   for (const r of results) {
+    if (r.skipped) {
+      log.info(`↷ ${r.projectName}: 续跑跳过（上一批次已完成）`);
+      continue;
+    }
     if (r.gameError) {
       hasFailure = true;
       log.warn(`✖ ${r.projectName}: 整体失败 - ${r.gameError}`);
@@ -189,8 +240,29 @@ function validateAllContent(games: ResolvedGameJob[]): boolean {
 function applyCliOverrides(cfg: AppConfig, opts: CliOptions): void {
   cfg.dryRun = opts.dryRun;
   cfg.noUpload = opts.noUpload;
+  cfg.resume = opts.resume;
   if (opts.useOpenPage) cfg.useOpenPage = true;
   if (opts.dryRun || opts.noTurnOn) cfg.autoTurnOn = false;
+}
+
+/**
+ * 计算本批次标识：取所有游戏排期里最早的日期（归一化为 YYYY-MM-DD）。
+ * 排期滚动到下一周后最早日期改变，runKey 随之变化，旧的续跑状态自动失效，
+ * 避免误跳过新一轮的游戏。无有效日期时退回今天日期。
+ */
+function computeRunKey(games: ResolvedGameJob[]): string {
+  let min: Date | undefined;
+  for (const game of games) {
+    for (const n of game.notifications) {
+      try {
+        const d = parseFlexibleDate(n.date);
+        if (!min || d < min) min = d;
+      } catch {
+        // 非法日期在 processGame 里会被拦截，这里忽略即可。
+      }
+    }
+  }
+  return toIsoDate(min ?? new Date());
 }
 
 /**
@@ -247,6 +319,13 @@ async function runAutomation(cfg: AppConfig, games: ResolvedGameJob[]): Promise<
   const page = await getPage(browser, preferredHost(cfg));
   page.setDefaultTimeout(cfg.stepTimeoutMs);
 
+  // 续跑状态：即便不带 --resume 也会记录进度，便于事后用 --resume 续跑。
+  const runKey = computeRunKey(games);
+  const state = loadRunState(cfg.runStatePath, runKey);
+  if (cfg.resume) {
+    log.warn(`*** --resume：本批次 runKey=${runKey}，将跳过已完成的游戏、已上传的不重复上传 ***`);
+  }
+
   const results: GameResult[] = [];
   let budget = cfg.maxItemsPerRun > 0 ? cfg.maxItemsPerRun : Number.POSITIVE_INFINITY;
   if (Number.isFinite(budget)) {
@@ -254,12 +333,33 @@ async function runAutomation(cfg: AppConfig, games: ResolvedGameJob[]): Promise<
   }
   try {
     for (const [gi, game] of games.entries()) {
+      const progress = getGameProgress(state, game.projectName);
+
+      // --resume：已完成的游戏整体跳过。
+      if (cfg.resume && progress.completed) {
+        log.info(`↷ 游戏「${game.projectName}」已在本批次完成，跳过。`);
+        results.push({
+          projectName: game.projectName,
+          total: game.notifications.length,
+          succeeded: 0,
+          failedLabels: [],
+          skipped: true,
+        });
+        continue;
+      }
+
       if (budget <= 0) {
         log.warn('已达单次运行条数上限，停止处理后续游戏。');
         break;
       }
+      // 续跑时已上传过的游戏跳过上传，避免重复批量创建。
+      const resumeCtx: ResumeCtx = {
+        state,
+        path: cfg.runStatePath,
+        skipUpload: cfg.resume && progress.uploaded,
+      };
       // 单个游戏内部已容错，异常也不影响后续游戏。
-      const { result, attempted } = await processGame(page, game, cfg, budget);
+      const { result, attempted } = await processGame(page, game, cfg, budget, resumeCtx);
       results.push(result);
       budget -= attempted;
 

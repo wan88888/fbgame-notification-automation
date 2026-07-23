@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { GameJob, GamesConfig, NotificationsConfig, ResolvedGameJob } from './types.js';
-import { discoverCampaigns } from './campaigns.js';
+import { discoverCampaigns, DEFAULT_NOTIFICATIONS_URL_TEMPLATE } from './campaigns.js';
 
 function env(key: string, fallback = ''): string {
   const v = process.env[key];
@@ -69,11 +69,27 @@ export interface AppConfig {
   useOpenPage: boolean;
   /** 单游戏兜底模式下，Send notifications 页的直达 URL（可选）。 */
   notificationsUrl: string;
+  /** campaigns 模式下用 appId 拼直达 URL 的模板（含 {appId} 占位符）。 */
+  notificationsUrlTemplate: string;
   /** 拟人化行为配置。 */
   humanize: HumanizeConfig;
   /** 单次运行最多处理多少条推送（跨所有游戏累计）。0 表示不限制。频率闸门。 */
   maxItemsPerRun: number;
+  /**
+   * 是否总是主动设置 Send Time Strategy。
+   * Meta 后台新建推送默认即为 Predicted Best Time，因此当目标策略就是该默认值时可跳过这一步，
+   * 少一次易碎的下拉交互。仅当排期指定了非默认策略时才会点选。
+   * 设为 true 可强制每条都主动设置（兼容默认值被改动的情况）。
+   */
+  alwaysSetStrategy: boolean;
+  /** 断点续跑状态文件路径（记录每个游戏 uploaded/completed，供 --resume 使用）。 */
+  runStatePath: string;
+  /** 断点续跑开关（由命令行 --resume 覆盖，见 cli.ts）。 */
+  resume: boolean;
 }
+
+/** Meta 后台新建推送时 Send Time Strategy 的默认值。 */
+export const DEFAULT_SEND_TIME_STRATEGY = 'Predicted Best Time';
 
 export function loadConfig(): AppConfig {
   const cfg: AppConfig = {
@@ -100,6 +116,7 @@ export function loadConfig(): AppConfig {
     noUpload: false,
     useOpenPage: envBool('USE_OPEN_PAGE', false),
     notificationsUrl: env('NOTIFICATIONS_URL'),
+    notificationsUrlTemplate: env('NOTIFICATIONS_URL_TEMPLATE', DEFAULT_NOTIFICATIONS_URL_TEMPLATE),
     humanize: {
       enabled: envBool('HUMANIZE', true),
       thinkMinMs: envInt('THINK_MIN_MS', 600),
@@ -112,6 +129,9 @@ export function loadConfig(): AppConfig {
       betweenGamesMaxMs: envInt('BETWEEN_GAMES_MAX_MS', 45000),
     },
     maxItemsPerRun: envInt('MAX_ITEMS_PER_RUN', 0),
+    alwaysSetStrategy: envBool('ALWAYS_SET_STRATEGY', false),
+    runStatePath: env('RUN_STATE_PATH', './.run-state.json'),
+    resume: false,
   };
 
   if (!cfg.adspower.userId) {
@@ -157,7 +177,7 @@ export function loadNotifications(path: string): NotificationsConfig {
  */
 export function resolveGames(cfg: AppConfig): ResolvedGameJob[] {
   // 1) campaigns 自动发现。
-  const campaigns = discoverCampaigns(cfg.campaignDir);
+  const campaigns = discoverCampaigns(cfg.campaignDir, cfg.notificationsUrlTemplate);
   if (campaigns.length > 0) return campaigns;
 
   // 2) games.json。

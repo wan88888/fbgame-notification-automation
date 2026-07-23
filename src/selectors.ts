@@ -64,6 +64,22 @@ export const selectors = {
     delete: 'Delete',
   },
 
+  /** 列表 Status 列的取值文案。 */
+  statusValues: {
+    /** 已完成（已发送）。这类通知仍占用「active 名额」，可删除以腾位。 */
+    completed: 'Completed',
+  },
+
+  /** 删除通知的二次确认弹窗。 */
+  deleteConfirm: {
+    /** 弹窗标题文本，用于确认弹窗已出现。 */
+    titleText: 'Deletion Confirmation',
+    /** 确认删除按钮文本。 */
+    confirmButtonText: 'Delete',
+    /** 取消按钮文本。 */
+    cancelText: 'Cancel',
+  },
+
   /** 编辑页（View/Edit 打开后）的元素。 */
   editor: {
     /** 「Notification Date」标签文本，用于定位其下方的日期输入框。 */

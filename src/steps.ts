@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Locator, Page } from 'playwright';
+import { DEFAULT_SEND_TIME_STRATEGY } from './config.js';
 import type { AppConfig } from './config.js';
 import type { NotificationSchedule, ResolvedGameJob } from './types.js';
 import { selectors as S } from './selectors.js';
 import { log } from './logger.js';
 import { clickByText, openRowMenu, toUsDate } from './playwright-utils.js';
+import { dateInputMatches } from './date-utils.js';
 import { humanClick, humanType, think } from './humanize.js';
 
 /**
@@ -210,15 +212,41 @@ export async function editNotification(
   log.step(`[${notif.label}] 设置日期: ${usDate}`);
   const dateInput = await resolveDateInput(page);
   await humanType(page, dateInput, usDate, cfg.humanize, t);
-  // 关闭可能弹出的日历浮层。
-  await page.keyboard.press('Escape').catch(() => undefined);
+  // 提交日期：让输入框失焦提交。
+  // 切勿按 Escape——Meta 日期选择器会把它当作「取消」，撤销刚输入的日期、还原成默认值，
+  // 结果 Save 保存的是默认日期（这正是「看到输入了却不生效」的根因）。
+  await dateInput.blur().catch(() => undefined);
   await think(cfg.humanize);
 
+  // 回读校验：确认日期真的写进去了，否则重试一次；仍不一致就报错，
+  // 避免静默保存成错误/默认日期。
+  let shownDate = (await dateInput.inputValue().catch(() => '')).trim();
+  if (!dateInputMatches(shownDate, usDate)) {
+    log.warn(
+      `[${notif.label}] 日期框回显为 "${shownDate}"，与目标 ${usDate} 不一致，重试直填一次。`,
+    );
+    await dateInput.fill(usDate).catch(() => undefined);
+    await dateInput.blur().catch(() => undefined);
+    shownDate = (await dateInput.inputValue().catch(() => '')).trim();
+    if (!dateInputMatches(shownDate, usDate)) {
+      throw new Error(
+        `日期未正确写入：期望 ${usDate}，日期框实际为 "${shownDate}"。` +
+          `可能该日期框是需点日历选择的特殊组件，请对照页面调整 src/steps.ts 的日期填写逻辑。`,
+      );
+    }
+  }
+  log.ok(`[${notif.label}] 日期框已确认: ${shownDate}`);
+
   // ---- 设置 Send Time Strategy ----
-  const strategy = notif.sendTimeStrategy ?? 'Predicted Best Time';
-  log.step(`[${notif.label}] 选择发送策略: ${strategy}`);
-  await selectSendTimeStrategy(page, strategy, t, cfg);
-  await think(cfg.humanize);
+  const strategy = notif.sendTimeStrategy?.trim() || DEFAULT_SEND_TIME_STRATEGY;
+  if (strategy === DEFAULT_SEND_TIME_STRATEGY && !cfg.alwaysSetStrategy) {
+    // 后台默认即为 Predicted Best Time，无需再点一次下拉（少一次易碎交互）。
+    log.info(`[${notif.label}] 发送策略为默认值（${strategy}），跳过选择步骤。`);
+  } else {
+    log.step(`[${notif.label}] 选择发送策略: ${strategy}`);
+    await selectSendTimeStrategy(page, strategy, t, cfg);
+    await think(cfg.humanize);
+  }
 
   // ---- 保存 / dry-run 时改为 Cancel ----
   if (cfg.dryRun) {
@@ -262,6 +290,82 @@ export async function turnOnNotification(
     );
   }
   log.ok(`[${notif.label}] 已 Turn On`);
+}
+
+/**
+ * 步骤 5（腾位）：删除当前列表里所有 Status=Completed 的通知。
+ * Completed（已发送）通知仍占用 Meta「每 app 最多 10 条 active」的名额，
+ * 撞到上限时删掉它们即可腾出空位。返回实际删除的条数。
+ * dry-run 下只统计、不真删。
+ */
+export async function deleteCompletedNotifications(page: Page, cfg: AppConfig): Promise<number> {
+  const t = cfg.stepTimeoutMs;
+  const hz = cfg.humanize;
+
+  const completedRows = (): Locator =>
+    page
+      .getByRole('row')
+      .filter({ has: page.getByText(S.statusValues.completed, { exact: true }) });
+
+  const total = await completedRows().count();
+  if (total === 0) {
+    log.info('列表中没有 Status=Completed 的通知，跳过删除。');
+    return 0;
+  }
+
+  if (cfg.dryRun) {
+    log.warn(`dry-run：检测到 ${total} 条 Completed 通知，但不执行删除。`);
+    return 0;
+  }
+
+  log.step(`检测到 ${total} 条 Completed 通知，开始删除以腾出 active 名额 ...`);
+  let deleted = 0;
+  const cap = total + 5; // 安全上限，避免异常情况下的死循环。
+  for (let i = 0; i < cap; i++) {
+    const row = completedRows().first();
+    if (!(await row.count())) break;
+    await row.scrollIntoViewIfNeeded({ timeout: t }).catch(() => undefined);
+
+    // 行末尾的「...」菜单。
+    const menuBtn = row.getByRole('button').last();
+    await humanClick(page, menuBtn, hz, t);
+    await think(hz);
+
+    // 菜单里的 Delete。
+    await clickByText(page, S.menuItems.delete, t, hz);
+    await think(hz);
+
+    // 二次确认弹窗 -> Delete。
+    await confirmDeletion(page, cfg);
+
+    // 等列表刷新（被删的行消失）。
+    await page.waitForTimeout(1000);
+    deleted += 1;
+    log.ok(`已删除 Completed 通知 ${deleted}/${total}`);
+  }
+
+  log.ok(`共删除 ${deleted} 条 Completed 通知。`);
+  return deleted;
+}
+
+/** 处理「Deletion Confirmation」弹窗，点击确认删除。 */
+async function confirmDeletion(page: Page, cfg: AppConfig): Promise<void> {
+  const t = cfg.stepTimeoutMs;
+  const title = page.getByText(S.deleteConfirm.titleText, { exact: false }).first();
+  await title.waitFor({ state: 'visible', timeout: t }).catch(() => undefined);
+
+  // 优先在弹窗容器（role=dialog）内点确认按钮，避免误点右上角禁用的 Delete。
+  const dialog = page.getByRole('dialog');
+  const scope = (await dialog.count()) ? dialog.first() : undefined;
+  const confirmBtn = scope
+    ? scope.getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true })
+    : // 无 role=dialog 时兜底：取最后一个同名按钮（弹窗按钮通常晚于页面顶部按钮渲染）。
+      page.getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true }).last();
+
+  await humanClick(page, confirmBtn.first(), cfg.humanize, t);
+
+  // 等弹窗关闭。
+  await title.waitFor({ state: 'hidden', timeout: t }).catch(() => undefined);
 }
 
 /** 定位「Notification Date」标签下方的日期输入框。 */

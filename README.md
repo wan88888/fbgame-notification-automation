@@ -61,13 +61,13 @@ data/                 进阶/兜底用的手写配置示例
 
 ## 常用命令
 
-| 命令                    | 作用                                                                                           |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `npm run prep`          | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule）                   |
-| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`）                                          |
-| `npm run gen-schedule`  | 仅从内容表 `label` 生成/同步 `schedule/*.schedule.csv`（保留已填 `date`）                      |
-| `npm run validate`      | 只校验内容表与排期，不启动浏览器                                                               |
-| `npm start`             | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page`） |
+| 命令                    | 作用                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run prep`          | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule）                                                                                                          |
+| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`）                                                                                                                                 |
+| `npm run gen-schedule`  | 从内容表 `label` 生成/同步 `schedule/*.schedule.csv`，并**自动填充日期**（次日起连续 7 天，含周末）；`-- --start-date 2026-07-29` 指定起始日，`-- --keep-dates` 只同步 label 不动日期 |
+| `npm run validate`      | 只校验内容表与排期，不启动浏览器                                                                                                                                                      |
+| `npm start`             | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page --resume`）                                                                               |
 
 ## 数据来源优先级
 
@@ -164,6 +164,9 @@ npm start -- --game "Game A" --no-upload
 
 # 全部游戏正式跑
 npm start
+
+# 上一次跑到一半失败（如第 12 个游戏挂了），续跑：已完成的整体跳过、已上传的不重复上传
+npm start -- --resume
 ```
 
 调试参数说明：
@@ -177,6 +180,7 @@ npm start
 | `--no-turn-on`    | 本次不 Turn On（覆盖 `.env` 的 `AUTO_TURN_ON`）                  |
 | `--use-open-page` | 不导航，直接接管当前已打开的标签页（多游戏时只处理当前一个）     |
 | `--validate-only` | 只校验内容表/排期，不启动浏览器（等同 `npm run validate`）       |
+| `--resume`        | 断点续跑：跳过已完成的游戏，已上传未完成的游戏不重复上传         |
 
 配合 `.env` 里调大 `SLOW_MO_MS`（如 `300`）能更清楚地观察每一步。
 出错时看 `screenshots/` 截图，只改 `src/selectors.ts` 对应文本即可。
@@ -185,17 +189,39 @@ npm start
 
 「切项目 → Use Cases → 点菜单」这段导航的选择器最容易和真实页面对不上。有两种方式绕开：
 
-1. **每个游戏配固定 URL**：在 `campaigns/projects.json` 里给游戏配 `url`
-   （`{ "AHA": { "name": "AHA", "url": "https://..." } }`），工具直接 `goto` 到该页，
-   仍可无人值守批量跑。单游戏兜底模式可用 `.env` 的 `NOTIFICATIONS_URL`。
-2. **手动开好页面再接管**：你先在 AdsPower 浏览器里手动打开某游戏的 Send notifications 页，
-   然后加 `--use-open-page`，工具不导航、直接从 Create from CSV 开始：
+1. **每个游戏配 App ID（推荐）**：各游戏的 Send notifications 页 URL 只有 `/apps/<APP_ID>/`
+   这段不同，所以 `campaigns/projects.json` 里通常**只需填 `appId`**，其余由
+   `NOTIFICATIONS_URL_TEMPLATE` 模板自动补全：
+
+```json
+{ "AHA": { "name": "AHA", "appId": "696007096453320" } }
+```
+
+个别游戏所属 business 不同（模板拼不出正确 URL）时，可改用整条 `url` 覆盖：
+`{ "AHA": { "name": "AHA", "url": "https://..." } }`。单游戏兜底模式可用 `.env` 的 `NOTIFICATIONS_URL`。2. **手动开好页面再接管**：你先在 AdsPower 浏览器里手动打开某游戏的 Send notifications 页，
+然后加 `--use-open-page`，工具不导航、直接从 Create from CSV 开始：
 
 ```bash
 npm start -- --use-open-page --limit 1 --dry-run
 ```
 
 > `--use-open-page` 无法切换项目，多游戏时只处理当前这一个；要批量请用方式 1（固定 URL）。
+
+### 断点续跑（长任务失败后接着跑）
+
+18 个游戏 × 7 条是长任务，中途若因网络/风控/选择器等原因失败，不必从头再来：
+
+- 每处理完一个游戏，进度会写入 `.run-state.json`（`RUN_STATE_PATH` 可改，已 gitignore），
+  记录该游戏是否**已上传**、是否**已全部完成**。
+- 重跑时加 `--resume`：
+  - **已完成**的游戏整体跳过（不再导航/上传/编辑/Turn On）；
+  - **已上传但未完成**的游戏跳过 `Create from CSV`（避免重复批量创建），仍重做编辑 + Turn On。
+- 状态按「本批次」隔离：`runKey` 取排期里最早的日期，排期滚动到下一周后旧状态自动失效，
+  不会误跳过新一轮的游戏。
+
+> 提示：发送策略默认即为 `Predicted Best Time`，工具会**自动跳过**这一步的下拉选择；
+> 若排期表某条指定了别的策略，才会主动去点选。需要每条都强制设置可在 `.env` 设
+> `ALWAYS_SET_STRATEGY=true`。
 
 ## 降低自动化检测风险
 

@@ -4,7 +4,6 @@ import type { ProjectMapEntry, ResolvedGameJob } from './types.js';
 import { parseScheduleSheet } from './schedule.js';
 import { log } from './logger.js';
 
-const CONTENT_SUBDIR = 'content';
 const SCHEDULE_SUBDIR = 'schedule';
 const SCHEDULE_SUFFIX = '.schedule.csv';
 const PROJECT_MAP_FILE = 'projects.json';
@@ -14,6 +13,12 @@ const PROJECT_MAP_FILE = 'projects.json';
  * 推导游戏名时会剥掉它，得到真正的游戏名「AHA」，避免运营手工改名。
  */
 export const DEFAULT_CONTENT_NAME_PREFIX = '推送配置表';
+
+/**
+ * 内容表所在子目录（campaigns 下）。默认就是飞书下载的「推送配置表」文件夹，
+ * 运营把整个文件夹存到 campaigns/ 下即可，无需复制或清洗。
+ */
+export const DEFAULT_CONTENT_SUBDIR = '推送配置表';
 
 /**
  * 从内容表文件名（不含扩展名）推导游戏名 / 项目键。
@@ -97,11 +102,12 @@ export function discoverCampaigns(
   dir: string,
   urlTemplate: string = DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
   namePrefix: string = DEFAULT_CONTENT_NAME_PREFIX,
+  contentSubdir: string = DEFAULT_CONTENT_SUBDIR,
 ): ResolvedGameJob[] {
   const dirAbs = resolve(process.cwd(), dir);
   if (!existsSync(dirAbs)) return [];
 
-  const contentDir = join(dirAbs, CONTENT_SUBDIR);
+  const contentDir = join(dirAbs, contentSubdir);
   const scheduleDir = join(dirAbs, SCHEDULE_SUBDIR);
   if (!existsSync(contentDir)) return [];
 
@@ -124,7 +130,7 @@ export function discoverCampaigns(
 
     if (!existsSync(scheduleAbs)) {
       log.warn(
-        `跳过「${CONTENT_SUBDIR}/${csv}」：缺少配套排期表「${SCHEDULE_SUBDIR}/${scheduleFile}」。`,
+        `跳过「${contentSubdir}/${csv}」：缺少配套排期表「${SCHEDULE_SUBDIR}/${scheduleFile}」。`,
       );
       continue;
     }
@@ -132,14 +138,14 @@ export function discoverCampaigns(
     const notifications = parseScheduleSheet(scheduleAbs);
     if (notifications.length === 0) {
       log.warn(
-        `跳过「${CONTENT_SUBDIR}/${csv}」：排期表「${SCHEDULE_SUBDIR}/${scheduleFile}」没有已填日期的有效行。`,
+        `跳过「${contentSubdir}/${csv}」：排期表「${SCHEDULE_SUBDIR}/${scheduleFile}」没有已填日期的有效行。`,
       );
       continue;
     }
     const { projectName, url } = resolveProjectInfo(name, projectMap[name], urlTemplate);
     jobs.push({ projectName, url, csv: join(contentDir, csv), notifications });
     log.info(
-      `发现 campaign：${CONTENT_SUBDIR}/${csv} -> 项目「${projectName}」${url ? '（直达 URL）' : ''}，` +
+      `发现 campaign：${contentSubdir}/${csv} -> 项目「${projectName}」${url ? '（直达 URL）' : ''}，` +
         `${notifications.length} 条推送（排期表 ${SCHEDULE_SUBDIR}/${scheduleFile}）`,
     );
   }

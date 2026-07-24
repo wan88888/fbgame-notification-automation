@@ -9,11 +9,11 @@
 
 ## 运营同事：几步搞定（半自动化）
 
-> **人**负责放文件、填日期、确认 AdsPower 已登录；**机器**负责清洗/生成排期、上传、编辑、Save、Turn On。
+> **人**负责放文件、填日期、确认 AdsPower 已登录；**机器**负责生成排期、上传、编辑、Save、Turn On。
 
-1. 把内容表放进 `campaigns/content/<游戏>.csv`（如 `content/AHA.csv`）。
-2. `npm run prep`：一键清洗内容表 + 生成排期表。
-3. 打开 `schedule/<游戏>.schedule.csv`，**只填 `date` 列**（每条**不同日期**），再 `npm run validate`。
+1. 把飞书下载的「推送配置表」文件夹整个存到 `campaigns/` 下（里面是 `推送配置表 - <游戏>.csv`，**无需改名/清洗**）。2.（可选）`npm run relabel`：批量统一 label 结尾数字的补零位数（如 `AHA_1`→`AHA_01`，`--pad 3` 补 3 位）。
+2. `npm run gen-schedule`：从内容表生成排期表（并自动填日期）。
+3. 打开 `schedule/<游戏>.schedule.csv`，**只填 `date` 列**（每条**不同日期**）。
 4. 启动运行，看成功/失败汇总；出错看 `screenshots/`：
    - **推荐**：在项目目录执行 **`./run.sh`**（首次需 `chmod +x run.sh`）
    - **任意平台**：也可直接 `npm start`
@@ -25,19 +25,19 @@
 
 ## 工作原理
 
-1. 从 `campaigns/content/` + `campaigns/schedule/` 按同名自动发现「内容表 + 排期表」
-   配对（文件名即游戏名，可用 `campaigns/projects.json` 映射到 Meta 项目显示名）。
+1. 从 `campaigns/推送配置表/` + `campaigns/schedule/` 按同名自动发现「内容表 + 排期表」
+   配对（文件名去掉「推送配置表 - 」前缀即游戏名，可用 `campaigns/projects.json` 映射到 Meta 项目显示名）。
 2. 通过 AdsPower 本地 API `/api/v1/browser/start` 启动指定 profile 的浏览器，
    拿到 CDP 端点 `data.ws.puppeteer`；Playwright 用 `chromium.connectOverCDP()` 接管。
 3. 逐个游戏执行：切项目 → Create from CSV 上传内容表 → 按排期表逐条
    View/Edit（填日期 + Send Time Strategy）→ Save → 逐条 Turn On。日期/策略只来自
-   排期表，内容表原样上传、不做解析。
+   排期表；内容表**原样上传**（不做列改名/清洗，与运营手动上传的文件一致）。
 
 ## 目录结构
 
 ```
 src/
-  main.ts             流程编排入口（含 --validate-only）
+  main.ts             流程编排入口
   config.ts           读取 .env 与 notifications 配置
   adspower.ts         AdsPower 本地 API 客户端（start/stop/active）
   playwright-utils.ts CDP 接管、窗口最大化、行/菜单定位与滚动、截图等工具
@@ -45,15 +45,14 @@ src/
   steps.ts            各步骤实现（导航 / 上传 CSV / 编辑 / Turn On）
   schedule.ts         解析排期表（label,date,send_time_strategy）
   campaigns.ts        从 campaigns/ 自动发现「内容表+排期表」配对
-  validate.ts         内容表校验（列/必填/重复 label/同日冲突/与排期对齐）
+  validate.ts         排期日期格式 / 同日冲突检查（运行时轻量护栏）
   gen-schedule.ts     从内容表 label 生成/同步排期表
-  clean-content.ts    清洗内容表为 Meta 可接受格式
+  relabel.ts          批量修改内容表 label 结尾数字的补零位数
   types.ts            类型定义
   logger.ts           日志
 campaigns/            ★ 运营放文件的地方（见 campaigns/README.md）
-  content/            内容表（如 AHA.csv）
+  推送配置表/         飞书下载的原始文件夹（内容表直接放这里，不入库）
   schedule/           排期表（如 AHA.schedule.csv）
-  content-raw/        清洗前的原始备份（clean-content 自动生成，不入库）
   projects.json       可选：文件名 → Meta 项目显示名 / 直达 URL 映射
 run.sh                运营运行入口（./run.sh；也可直接 npm start）
 data/                 进阶/兜底用的手写配置示例
@@ -61,19 +60,17 @@ data/                 进阶/兜底用的手写配置示例
 
 ## 常用命令
 
-| 命令                    | 作用                                                                                                                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run prep`          | **推荐**：一键清洗内容表 + 生成/同步排期表（= clean-content + gen-schedule）                                                                                                          |
-| `npm run clean-content` | 仅清洗 `content/*.csv`（首次会备份到 `content-raw/`）                                                                                                                                 |
-| `npm run gen-schedule`  | 从内容表 `label` 生成/同步 `schedule/*.schedule.csv`，并**自动填充日期**（次日起连续 7 天，含周末）；`-- --start-date 2026-07-29` 指定起始日，`-- --keep-dates` 只同步 label 不动日期 |
-| `npm run validate`      | 只校验内容表与排期，不启动浏览器                                                                                                                                                      |
-| `npm start`             | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page --resume`）                                                                               |
+| 命令                   | 作用                                                                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run gen-schedule` | **推荐**：从内容表 `label` 生成/同步 `schedule/*.schedule.csv`，并**自动填充日期**（次日起连续 7 天，含周末）；`-- --start-date 2026-07-29` 指定起始日，`-- --keep-dates` 只同步 label 不动日期 |
+| `npm run relabel`      | 批量修改内容表 label 结尾数字的补零位数（`-- --pad 2` 默认 / `--pad 3`；`--dry-run` 预览；`--game <名>` 只处理某游戏）。改完记得重跑 `gen-schedule`                                             |
+| `npm start`            | 正式运行（可加 `-- --game <名> --limit N --dry-run --no-upload --no-turn-on --use-open-page --resume`）                                                                                         |
 
 ## 数据来源优先级
 
 工具按以下顺序决定要处理哪些游戏（满足前者就不看后者）：
 
-1. **`campaigns/content/` + `campaigns/schedule/`** 里的「内容表 + 排期表」配对 —— 运营主用。
+1. **`campaigns/推送配置表/` + `campaigns/schedule/`** 里的「内容表 + 排期表」配对 —— 运营主用。
 2. `data/games.json` —— 进阶，手写多游戏。
 3. `.env` 里的 `PROJECT_NAME` + `NOTIFICATIONS_CONFIG` + `CSV_FILE` —— 单游戏兜底。
 
@@ -94,7 +91,7 @@ cp .env.example .env
 - `ADSPOWER_API_KEY`：若在 AdsPower 里开启了 API 鉴权才需要。
 - 其余运行参数见文件内注释。
 
-配好后，日常使用就交给运营：往 `campaigns/content/` 与 `campaigns/schedule/` 放文件，然后执行
+配好后，日常使用就交给运营：把飞书「推送配置表」文件夹存到 `campaigns/` 下、填好 `campaigns/schedule/` 的日期，然后执行
 `./run.sh`（或 `npm start`）。（`run.sh` 首次运行也会自动帮忙装依赖、生成 `.env`。）
 
 ## 进阶：手写多游戏配置（可选）
@@ -179,7 +176,6 @@ npm start -- --resume
 | `--no-upload`     | 跳过 Create from CSV（避免反复调试时重复批量创建）               |
 | `--no-turn-on`    | 本次不 Turn On（覆盖 `.env` 的 `AUTO_TURN_ON`）                  |
 | `--use-open-page` | 不导航，直接接管当前已打开的标签页（多游戏时只处理当前一个）     |
-| `--validate-only` | 只校验内容表/排期，不启动浏览器（等同 `npm run validate`）       |
 | `--resume`        | 断点续跑：跳过已完成的游戏，已上传未完成的游戏不重复上传         |
 
 配合 `.env` 里调大 `SLOW_MO_MS`（如 `300`）能更清楚地观察每一步。

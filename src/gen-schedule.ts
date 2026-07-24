@@ -1,5 +1,5 @@
 /**
- * 从 campaigns/content/*.csv 的 label 列生成 / 同步 schedule/*.schedule.csv。
+ * 从 campaigns/推送配置表/*.csv 的 label 列生成 / 同步 schedule/*.schedule.csv。
  *
  * - label：来自内容表（保持顺序）
  * - send_time_strategy：固定为 Predicted Best Time
@@ -21,9 +21,14 @@ import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
 import { csvEscape } from './csv-utils.js';
 import { defaultStartDate, generateDates, isValidDate, toIsoDate } from './date-utils.js';
-import { deriveProjectKey, DEFAULT_CONTENT_NAME_PREFIX } from './campaigns.js';
+import {
+  deriveProjectKey,
+  DEFAULT_CONTENT_NAME_PREFIX,
+  DEFAULT_CONTENT_SUBDIR,
+} from './campaigns.js';
 
-const CONTENT_DIR = resolve(process.cwd(), 'campaigns/content');
+const CONTENT_SUBDIR = process.env['CONTENT_SUBDIR'] || DEFAULT_CONTENT_SUBDIR;
+const CONTENT_DIR = resolve(process.cwd(), 'campaigns', CONTENT_SUBDIR);
 const SCHEDULE_DIR = resolve(process.cwd(), 'campaigns/schedule');
 const SCHEDULE_SUFFIX = '.schedule.csv';
 const DEFAULT_STRATEGY = 'Predicted Best Time';
@@ -155,7 +160,7 @@ function main(): void {
     .sort();
 
   if (contentFiles.length === 0) {
-    log.warn('content/ 下没有可处理的内容表。');
+    log.warn(`${CONTENT_SUBDIR}/ 下没有可处理的内容表。`);
     return;
   }
 

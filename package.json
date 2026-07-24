@@ -5,10 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-    "validate": "tsx src/main.ts --validate-only",
     "gen-schedule": "tsx src/gen-schedule.ts",
-    "clean-content": "tsx src/clean-content.ts",
-    "prep": "npm run clean-content && npm run gen-schedule",
+    "relabel": "tsx src/relabel.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

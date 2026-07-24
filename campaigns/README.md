@@ -1,29 +1,26 @@
 # campaigns 目录（运营放文件的地方）
 
-每个游戏放**一对**文件，分别放进两个子目录，工具会按同名自动配对：
+把飞书下载的「推送配置表」文件夹整个存到 `campaigns/` 下即可，工具会拿里面的内容表和
+`schedule/` 下的排期表按同名自动配对：
 
 | 位置 | 说明 | 例子 |
 |---|---|---|
-| `content/<游戏>.csv` | 内容表：原样上传到 Meta「Create from CSV」 | `content/AHA.csv` |
+| `推送配置表/推送配置表 - <游戏>.csv` | 内容表：飞书原始导出，**无需改名/清洗**，上传到 Meta「Create from CSV」 | `推送配置表/推送配置表 - AHA.csv` |
 | `schedule/<游戏>.schedule.csv` | 排期表：告诉工具每条推送用哪天、什么发送策略 | `schedule/AHA.schedule.csv` |
 
 ```
 campaigns/
-  content/                 # 内容表
-    AHA.csv
+  推送配置表/               # 飞书原始文件夹（内容表直接放这里）
+    推送配置表 - AHA.csv
   schedule/                # 排期表
     AHA.schedule.csv
   projects.json            # 可选：显示名 / 直达 URL 映射
 ```
 
-> 文件名要一致：`content/AHA.csv` 对应 `schedule/AHA.schedule.csv`。工具会用文件名 `AHA`
-> 去 Meta 后台切换到对应游戏项目。若后台里的项目显示名和文件名不一样，
-> 在本目录的 `projects.json` 里加一条映射即可。
-
-> **运营导出的文件名带前缀也没关系**：像 `推送配置表 - AHA.csv` 会被自动识别为游戏 `AHA`
-> （剥掉 `推送配置表` 前缀和分隔符），运营**无需手工改名**，直接放进 `content/` 即可。
-> 前缀可在 `.env` 的 `CONTENT_NAME_PREFIX` 调整（留空则不剥离）。生成的排期表也会用剥离后的名字，
-> 即 `schedule/AHA.schedule.csv`。
+> **文件名带前缀没关系**：`推送配置表 - AHA.csv` 会被自动识别为游戏 `AHA`（剥掉 `推送配置表`
+> 前缀和分隔符），排期表也用剥离后的名字，即 `schedule/AHA.schedule.csv`。工具用 `AHA`
+> 去 Meta 后台切换项目；若后台显示名和文件名不同，在 `projects.json` 里加一条映射即可。
+> 前缀可在 `.env` 的 `CONTENT_NAME_PREFIX` 调整，文件夹名可用 `CONTENT_SUBDIR` 调整。
 
 ## projects.json（可选，强烈推荐配 URL）
 
@@ -53,7 +50,7 @@ npm run gen-schedule
 
 | 列 | 来源 |
 |---|---|
-| `label` | 自动取自 `content/<游戏>.csv` 的 `label` 列 |
+| `label` | 自动取自 `推送配置表/推送配置表 - <游戏>.csv` 的 `label` 列 |
 | `send_time_strategy` | 固定为 `Predicted Best Time` |
 | `date` | **仅此列需人工填写**（`年-月-日`，UTC） |
 
@@ -68,33 +65,35 @@ AHA_003,,Predicted Best Time
 - `date`：推荐 `年-月-日`（如 `2026-07-19`），也支持 `月/日/年`。**请用 UTC 日期**。未填日期的行会被跳过、不处理。
 - `send_time_strategy`（推送类别）：一般就是 `Predicted Best Time`。
 
-## 内容表清洗（推荐）
+## 关于原始表的列（无需清洗）
 
-运营导出的原始表常带工作用列（`Date`、`Json_template`、`image_url`、`url`）和表尾多余逗号。
-日常请用一键准备：
+飞书导出的原始表会带一些工作用列（`Date`、`Json_template`、`url`、`image_url`）和表尾多余
+逗号——Meta「Create from CSV」会**自动忽略/识别**这些列，所以**不需要清洗、不需要改列名**，
+和运营手动上传的文件一模一样直接用即可。
+
+## 可选：批量改 label 补零位数
+
+想把 `AHA_1～AHA_8` 统一成 `AHA_01～AHA_08`（或 `AHA_001～AHA_008`）时，用 `npm run relabel`：
 
 ```bash
-npm run prep          # = clean-content + gen-schedule
+npm run relabel -- --dry-run        # 先预览（不写文件）
+npm run relabel -- --pad 2          # 补到 2 位
+npm run relabel -- --pad 3 --game "AHA"
 ```
 
-单独清洗也可以：
-
-```bash
-npm run clean-content
-```
-
-- 删除不支持的列与空列；`image_url` 重命名为 `media_url`（Meta 的图片列）。
-- 只保留：`label`、`media_url`、`payload`、`bot_message_payload_elements`、各语言 `notification_title_* / notification_body_*`。
-- 原始文件首次运行会备份到 `campaigns/content-raw/`（不入库）。
+只改 label 结尾的连续数字，前缀与其它列、跨行 JSON 字段全部原样保留。改完 label 后请重跑
+`npm run gen-schedule`（已排好日期用 `-- --keep-dates` 按行位次保留日期）。
 
 ## 使用步骤（运营 · 半自动化）
 
-1. 把内容表放进 `campaigns/content/<游戏>.csv`。
-2. `npm run prep`（清洗 + 生成排期）。
-3. **只填** `schedule/*.schedule.csv` 的 `date` 列（每条用**不同日期**，见下方限制）。
-4. `npm run validate` 检查是否合格。
+1. 从飞书把「推送配置表」文件夹整个下载/保存到 `campaigns/` 下（里面是各游戏的
+   `推送配置表 - <游戏>.csv`，**无需改名/清洗**）。
+2.（可选）`npm run relabel` 批量统一 label 补零位数（见上一节）。
+3. `npm run gen-schedule`：从内容表生成排期表（并按「次日起连续 N 天」自动填好日期）。
+4. **只填/调整** `schedule/*.schedule.csv` 的 `date` 列（每条用**不同日期**，见下方限制）。
+   如自动填的日期就行，可跳过这步。
 5. 确认 AdsPower 已开且已登录后，执行 `./run.sh`（或 `npm start`）。
-6. 看窗口里的成功/失败汇总；出错会在 `screenshots/` 留截图。
+6. 看窗口里的成功/失败汇总；出错会在 `screenshots/` 留截图（配了飞书 webhook 还会推送到群）。
 
 > 带 `.example` 的示例文件不会被处理，仅供参考格式。
 > 更完整的流程图与报错对照见 [`docs/运营操作指南.md`](../docs/运营操作指南.md)。
@@ -105,8 +104,8 @@ npm run clean-content
 |---|---|---|---|
 | **同一天只能 1 条 active Single Send** | 每个 app 每天最多 1 条已开启的单发通知 | 第 2 条 Save 报 `You cannot have more than 1 active Single Send notification scheduled in one day` | 排期表里**每条用不同日期**，别都填同一天 |
 | **每个 app 最多 10 条 active** | 一个游戏同时最多 10 条处于 active 的通知设置 | Turn On 报 `You cannot have more than 10 active notification settings per app` | 先到后台把过期/多余的 **Turn Off 或删除**，把 active 数降下来；分批投放 |
-| **label 不能重复** | 同一 app 内 label 唯一 | 重新上传相同 label 会「Trying to create N…0 are created」 | 换新 label，或先删掉后台已存在的同名条目 |
-| **列格式** | 仅支持 `label` / `notification_title_*` / `notification_body_*` / `media_url` / `payload` / `bot_message_payload_elements` | 缺必填列会创建失败 | 用 `npm run clean-content` + `npm run validate` 先自检 |
+| **label 不能重复** | 同一 app 内 label 唯一 | 重新上传相同 label 会「Trying to create N…0 are created」 | 换新 label，或先删掉后台已存在的同名条目；也可用 `npm run relabel` 换补零位数让 label 整体变化 |
+| **列格式** | 原始表列（`label` / `notification_title_*` / `notification_body_*` / `image_url` / `payload` / `bot_message_payload_elements` 等）Meta 会自动识别或忽略多余列 | 缺必填列会创建失败 | 保持运营导出的原始表结构即可 |
 
 > 说明：`date` 请统一按 **UTC** 理解；未填 `date` 的行会被跳过、不处理。
 

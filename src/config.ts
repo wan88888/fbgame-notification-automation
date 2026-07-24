@@ -7,6 +7,7 @@ import {
   discoverCampaigns,
   DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
   DEFAULT_CONTENT_NAME_PREFIX,
+  DEFAULT_CONTENT_SUBDIR,
 } from './campaigns.js';
 
 function env(key: string, fallback = ''): string {
@@ -78,6 +79,8 @@ export interface AppConfig {
   notificationsUrlTemplate: string;
   /** 内容表文件名前缀（如「推送配置表 - AHA.csv」的「推送配置表」），推导游戏名时剥掉。 */
   contentNamePrefix: string;
+  /** 内容表所在子目录（campaigns 下），默认飞书下载的「推送配置表」文件夹。 */
+  contentSubdir: string;
   /** 拟人化行为配置。 */
   humanize: HumanizeConfig;
   /** 单次运行最多处理多少条推送（跨所有游戏累计）。0 表示不限制。频率闸门。 */
@@ -127,6 +130,7 @@ export function loadConfig(): AppConfig {
     notificationsUrl: env('NOTIFICATIONS_URL'),
     notificationsUrlTemplate: env('NOTIFICATIONS_URL_TEMPLATE', DEFAULT_NOTIFICATIONS_URL_TEMPLATE),
     contentNamePrefix: env('CONTENT_NAME_PREFIX', DEFAULT_CONTENT_NAME_PREFIX),
+    contentSubdir: env('CONTENT_SUBDIR', DEFAULT_CONTENT_SUBDIR),
     humanize: {
       enabled: envBool('HUMANIZE', true),
       thinkMinMs: envInt('THINK_MIN_MS', 600),
@@ -196,6 +200,7 @@ export function resolveGames(cfg: AppConfig): ResolvedGameJob[] {
     cfg.campaignDir,
     cfg.notificationsUrlTemplate,
     cfg.contentNamePrefix,
+    cfg.contentSubdir,
   );
   if (campaigns.length > 0) return campaigns;
 

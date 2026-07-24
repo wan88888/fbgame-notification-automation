@@ -14,7 +14,7 @@ import type { AppConfig } from './config.js';
 import type { ResolvedGameJob, GameResult } from './types.js';
 import { log, initFileLogging, getLogFile } from './logger.js';
 import { pause } from './humanize.js';
-import { validateContentCsv, findSameDayConflicts, validateScheduleDates } from './validate.js';
+import { findSameDayConflicts, validateScheduleDates } from './validate.js';
 import { parseFlexibleDate, toIsoDate } from './date-utils.js';
 import { loadRunState, getGameProgress, markGameProgress, type RunState } from './run-state.js';
 import { notifyFeishu } from './notify.js';
@@ -79,18 +79,6 @@ async function processGame(
     if (dateErrors.length > 0) {
       for (const err of dateErrors) log.error(`[${game.projectName}] 排期日期错误: ${err}`);
       throw new Error(`排期日期格式非法（${dateErrors.length} 处），已跳过本游戏。`);
-    }
-
-    // 上传前先校验内容表，尽早拦掉会导致「0 created」的数据问题。
-    if (!skipUpload) {
-      const scheduleLabels = game.notifications.map((n) => n.label);
-      const vr = validateContentCsv(game.csv, scheduleLabels);
-      for (const w of vr.warnings) log.warn(`[${game.projectName}] 内容表提示: ${w}`);
-      if (vr.errors.length > 0) {
-        for (const err of vr.errors) log.error(`[${game.projectName}] 内容表错误: ${err}`);
-        throw new Error(`内容表校验未通过（${vr.errors.length} 个错误），已跳过上传。`);
-      }
-      log.ok(`[${game.projectName}] 内容表校验通过（${vr.rowCount} 行）。`);
     }
 
     // 同一天多条提醒（Meta 每天只允许 1 条 active Single Send）。
@@ -202,29 +190,6 @@ function printSummary(results: GameResult[]): boolean {
   }
   log.info('=============================================');
   return hasFailure;
-}
-
-/** 仅校验所有游戏的内容表，打印汇总。返回是否全部通过。 */
-function validateAllContent(games: ResolvedGameJob[]): boolean {
-  log.info('================= 内容表校验 =================');
-  let allOk = true;
-  for (const game of games) {
-    const scheduleLabels = game.notifications.map((n) => n.label);
-    const vr = validateContentCsv(game.csv, scheduleLabels);
-    const dateErrors = validateScheduleDates(game.notifications);
-    for (const w of vr.warnings) log.warn(`[${game.projectName}] 提示: ${w}`);
-    warnSameDayConflicts(game);
-    const allErrors = [...vr.errors, ...dateErrors];
-    if (allErrors.length > 0) {
-      allOk = false;
-      log.error(`✖ ${game.projectName}: ${allErrors.length} 个错误`);
-      for (const err of allErrors) log.error(`    - ${err}`);
-    } else {
-      log.ok(`✔ ${game.projectName}: 通过（${vr.rowCount} 行）`);
-    }
-  }
-  log.info('=============================================');
-  return allOk;
 }
 
 /** 把命令行选项覆盖到配置上（dry-run / no-upload / use-open-page / turn-on 开关）。 */
@@ -390,13 +355,6 @@ async function run(): Promise<void> {
   if (logFile) log.info(`运行日志将写入: ${logFile}`);
 
   const games = selectGames(cfg, opts);
-
-  // --validate-only：只校验内容表，不启动浏览器。
-  if (opts.validateOnly) {
-    const ok = validateAllContent(games);
-    if (!ok) process.exitCode = 1;
-    return;
-  }
 
   if (cfg.dryRun) log.warn('*** DRY-RUN 模式：不会点击 Save，也不会 Turn On ***');
   if (cfg.useOpenPage) log.warn('*** USE-OPEN-PAGE：跳过导航，直接使用当前标签页 ***');

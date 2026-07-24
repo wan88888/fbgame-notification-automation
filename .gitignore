@@ -10,9 +10,8 @@ data/*.csv
 !data/notifications.example.csv
 
 # 运营真实投放文件不入库，仅保留示例
-campaigns/content/*.csv
-!campaigns/content/*.example*.csv
+# 飞书下载的原始「推送配置表」文件夹（内容表直接放这里，不复制不清洗）
+campaigns/推送配置表/
+# 生成的排期表
 campaigns/schedule/*.csv
 !campaigns/schedule/*.example*.csv
-# 清洗前的原始内容表备份
-campaigns/content-raw/

@@ -70,6 +70,12 @@ export const selectors = {
     completed: 'Completed',
   },
 
+  /** 列表页批量删除相关。 */
+  batchDelete: {
+    /** 顶部工具栏「Delete」按钮文本（勾选若干行后启用，点击弹出确认框）。 */
+    deleteButtonText: 'Delete',
+  },
+
   /** 删除通知的二次确认弹窗。 */
   deleteConfirm: {
     /** 弹窗标题文本，用于确认弹窗已出现。 */
@@ -91,6 +97,8 @@ export const selectors = {
     /** Save / Cancel 按钮文本。 */
     saveText: 'Save',
     cancelText: 'Cancel',
+    /** Save 失败时页面弹出的红色错误横幅文本（Meta 服务端错误）。 */
+    saveErrorText: 'Something went wrong',
   },
 };
 

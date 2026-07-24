@@ -82,14 +82,61 @@ export function defaultStartDate(runDay: Date = new Date()): Date {
   return new Date(runDay.getFullYear(), runDay.getMonth(), runDay.getDate() + 1);
 }
 
+/** 英文月份缩写/全名 → 1..12（Meta 日期框常回显为 "Jul 29, 2026"）。 */
+const MONTH_NAME_TO_NUM: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+/**
+ * 把回显字符串规整成 M/D/YYYY 数字形式；无法识别则返回空串。
+ * 支持 "7/29/2026"、"08/01/2026"、"Jul 29, 2026"、"July 29, 2026"。
+ */
+function normalizeShownDate(shown: string): string {
+  const s = (shown ?? '').trim();
+  if (!s) return '';
+
+  // "Jul 29, 2026" / "July 29, 2026"（Meta 常见回显）。
+  const named = s.match(/^([A-Za-z]+)\s+(\d{1,2})\s*,?\s*(\d{4})$/);
+  if (named) {
+    const month = MONTH_NAME_TO_NUM[named[1].toLowerCase()];
+    if (month) return `${month}/${Number(named[2])}/${named[3]}`;
+  }
+
+  // "M/D/YYYY" 等纯数字形式：按数字序列规整（去前导零）。
+  const parts = (s.match(/\d+/g) ?? []).map((n) => String(Number(n)));
+  return parts.length === 3 ? parts.join('/') : '';
+}
+
 /**
  * 判断「日期输入框回显值」是否与目标 M/D/YYYY 一致。
- * 按数字序列比较，容忍前导零与分隔符差异（"08/01/2026" ≈ "8/1/2026"）。
+ * 容忍前导零、分隔符差异，以及 Meta 回显的英文月份写法（"Jul 29, 2026" ≈ "7/29/2026"）。
  * 用于写入日期后回读校验，尽早发现「输入未生效」。
  */
 export function dateInputMatches(shown: string, usDate: string): boolean {
-  const nums = (s: string): string =>
-    ((s ?? '').match(/\d+/g) ?? []).map((n) => String(Number(n))).join('/');
-  const target = nums(usDate);
-  return target !== '' && nums(shown) === target;
+  const target = normalizeShownDate(usDate);
+  const actual = normalizeShownDate(shown);
+  return target !== '' && actual === target;
 }

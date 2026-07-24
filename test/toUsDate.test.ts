@@ -66,10 +66,18 @@ describe('dateInputMatches', () => {
     expect(dateInputMatches(' 8/1/2026 ', '8/1/2026')).toBe(true);
   });
 
+  it('认 Meta 英文月份回显（Jul 29, 2026 ≈ 7/29/2026）', () => {
+    expect(dateInputMatches('Jul 29, 2026', '7/29/2026')).toBe(true);
+    expect(dateInputMatches('July 29, 2026', '7/29/2026')).toBe(true);
+    expect(dateInputMatches('Aug 1, 2026', '8/1/2026')).toBe(true);
+    expect(dateInputMatches('August 1, 2026', '8/1/2026')).toBe(true);
+  });
+
   it('值不一致或为空时返回 false', () => {
     expect(dateInputMatches('7/23/2026', '8/1/2026')).toBe(false);
     expect(dateInputMatches('', '8/1/2026')).toBe(false);
-    expect(dateInputMatches('Aug 1, 2026', '8/1/2026')).toBe(false);
+    expect(dateInputMatches('Jul 29, 20267', '7/29/2026')).toBe(false);
+    expect(dateInputMatches('Aug 2, 2026', '8/1/2026')).toBe(false);
   });
 });
 

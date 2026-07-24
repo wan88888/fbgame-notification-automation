@@ -9,7 +9,11 @@ import {
   editNotification,
   turnOnNotification,
   deleteCompletedNotifications,
+  deleteNotificationsByLabels,
+  writeSubsetCsv,
+  isSaveServerError,
 } from './steps.js';
+import { resolve } from 'node:path';
 import type { AppConfig } from './config.js';
 import type { ResolvedGameJob, GameResult } from './types.js';
 import { log, initFileLogging, getLogFile } from './logger.js';
@@ -104,10 +108,17 @@ async function processGame(
   let attempted = 0;
   let skipTurnOn = false; // 本游戏命中 active 上限且无法腾位后置真，仅影响本游戏。
   let cleanupTried = false; // 本游戏是否已尝试过删除 Completed 腾位（每游戏最多一次）。
+  const serverErrorLabels: string[] = []; // Save 报「Something went wrong」的条目，稍后统一删除+重传补救。
   for (const [i, notif] of items.entries()) {
     try {
       await editNotification(page, notif, cfg);
-      if (cfg.autoTurnOn && !skipTurnOn) {
+      if (cfg.autoTurnOn) {
+        // 本游戏此前已撞上限且无法腾位：本条虽已保存，但无法 Turn On，如实记为失败（不算成功）。
+        if (skipTurnOn) {
+          throw new Error(
+            'ACTIVE_LIMIT: 已达 Meta 每 app 10 条 active 上限，本条已保存但未 Turn On（请在后台腾出 active 名额后重跑）。',
+          );
+        }
         try {
           await turnOnNotification(page, notif, cfg);
         } catch (e) {
@@ -129,18 +140,30 @@ async function processGame(
       result.succeeded += 1;
     } catch (e) {
       const msg = (e as Error).message;
-      log.error(`[${game.projectName}][${notif.label}] 处理失败: ${msg}`);
-      await screenshotOnError(page, cfg.screenshotDir, `${game.projectName}_${notif.label}`);
-      result.failedLabels.push({ label: notif.label, error: msg });
-      // 关闭可能残留的编辑面板/菜单，继续下一条。
-      await page.keyboard.press('Escape').catch(() => undefined);
-
-      // 已达上限且无法腾位（无 Completed 可删），本游戏剩余不再尝试 Turn On。
-      if (isActiveLimit(msg)) {
+      // Save 遇到 Meta 服务端错误：本轮先跳过，收集起来在本游戏末尾统一「删除+重传+重编辑」补救。
+      if (isSaveServerError(msg)) {
         log.warn(
-          `[${game.projectName}] 已达 Meta 每 app 10 条 active 上限且无法腾位，跳过本游戏剩余条目的 Turn On。`,
+          `[${game.projectName}][${notif.label}] Save 遇到服务端错误，先跳过，稍后统一删除+重传补救。`,
         );
-        skipTurnOn = true;
+        serverErrorLabels.push(notif.label);
+      } else if (isActiveLimit(msg)) {
+        // 已达 active 上限且无法腾位：本条已保存但未 Turn On，如实记为失败（避免误报成功）。
+        // 后续条目直接走这里、只保存不再尝试 Turn On，且不重复截图刷屏。
+        if (!skipTurnOn) {
+          log.warn(
+            `[${game.projectName}] 已达 Meta 每 app 10 条 active 上限且无 Completed 可删，本游戏后续条目将只保存、不再尝试 Turn On。`,
+          );
+          skipTurnOn = true;
+        }
+        log.error(`[${game.projectName}][${notif.label}] 未 Turn On：${msg}`);
+        result.failedLabels.push({ label: notif.label, error: msg });
+        await page.keyboard.press('Escape').catch(() => undefined);
+      } else {
+        log.error(`[${game.projectName}][${notif.label}] 处理失败: ${msg}`);
+        await screenshotOnError(page, cfg.screenshotDir, `${game.projectName}_${notif.label}`);
+        result.failedLabels.push({ label: notif.label, error: msg });
+        // 关闭可能残留的编辑面板/菜单，继续下一条。
+        await page.keyboard.press('Escape').catch(() => undefined);
       }
     }
     attempted += 1;
@@ -156,6 +179,11 @@ async function processGame(
     }
   }
 
+  // Save 服务端错误的条目：统一「删除 -> 只重传这些行 -> 重新编辑」补救。
+  if (serverErrorLabels.length > 0) {
+    await recoverServerErrors(page, game, serverErrorLabels, cfg, result, skipTurnOn);
+  }
+
   // 全部成功（无失败条目）才标记 completed，供 --resume 整体跳过。
   if (resume && result.failedLabels.length === 0) {
     markGameProgress(resume.path, resume.state, game.projectName, { completed: true });
@@ -163,6 +191,85 @@ async function processGame(
 
   log.ok(`游戏「${game.projectName}」完成：成功 ${result.succeeded}/${result.total}`);
   return { result, attempted };
+}
+
+/**
+ * 对本游戏内 Save 报「Something went wrong」的条目做补救：
+ * 删除这些行 -> 用 Create from CSV 只重传这些行 -> 重新编辑（+ Turn On）。
+ * 结果直接写回 result（成功计入 succeeded，仍失败计入 failedLabels）。
+ */
+async function recoverServerErrors(
+  page: Page,
+  game: ResolvedGameJob,
+  labels: string[],
+  cfg: AppConfig,
+  result: GameResult,
+  skipTurnOn: boolean,
+): Promise<void> {
+  const fail = (error: string): void => {
+    for (const label of labels) result.failedLabels.push({ label, error });
+  };
+
+  log.info(
+    `===== [${game.projectName}] 对 ${labels.length} 条 Save 失败项执行「删除+重传+重编辑」补救：${labels.join(', ')} =====`,
+  );
+
+  if (cfg.dryRun) {
+    log.warn('dry-run：跳过补救。');
+    fail('Save 服务端错误（dry-run 未补救）');
+    return;
+  }
+  if (cfg.noUpload) {
+    log.warn('--no-upload：无法重传，跳过补救（去掉 --no-upload 后重跑即可自动补救）。');
+    fail('Save 服务端错误（--no-upload 未补救）');
+    return;
+  }
+
+  // 1) 删除出问题的行。
+  try {
+    await deleteNotificationsByLabels(page, labels, cfg);
+  } catch (e) {
+    log.error(`[${game.projectName}] 补救-删除失败: ${(e as Error).message}`);
+    fail(`补救删除失败: ${(e as Error).message}`);
+    return;
+  }
+
+  // 2) 只重传这些行（抽取内容表子集为临时 CSV）。
+  const subset = writeSubsetCsv(resolve(process.cwd(), game.csv), labels);
+  if (!subset) {
+    log.error(`[${game.projectName}] 补救-未能生成子集 CSV（内容表中找不到这些 label）。`);
+    fail('补救子集 CSV 生成失败');
+    return;
+  }
+  try {
+    await uploadCsv(page, subset, cfg);
+  } catch (e) {
+    log.error(`[${game.projectName}] 补救-重传失败: ${(e as Error).message}`);
+    fail(`补救重传失败: ${(e as Error).message}`);
+    return;
+  }
+
+  // 3) 逐条重新编辑（+ Turn On）。
+  const byLabel = new Map(game.notifications.map((n) => [n.label, n]));
+  for (const label of labels) {
+    const notif = byLabel.get(label);
+    if (!notif) {
+      result.failedLabels.push({ label, error: '补救时找不到对应排期条目' });
+      continue;
+    }
+    try {
+      await editNotification(page, notif, cfg);
+      if (cfg.autoTurnOn && !skipTurnOn) await turnOnNotification(page, notif, cfg);
+      result.succeeded += 1;
+      log.ok(`[${game.projectName}][${label}] 补救成功。`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      log.error(`[${game.projectName}][${label}] 补救后仍失败: ${msg}`);
+      await screenshotOnError(page, cfg.screenshotDir, `${game.projectName}_${label}_recreate`);
+      result.failedLabels.push({ label, error: `补救后仍失败: ${msg}` });
+      await page.keyboard.press('Escape').catch(() => undefined);
+    }
+  }
 }
 
 function printSummary(results: GameResult[]): boolean {

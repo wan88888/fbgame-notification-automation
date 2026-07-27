@@ -43,7 +43,7 @@ src/
   playwright-utils.ts CDP 接管、窗口最大化、行/菜单定位与滚动、截图等工具
   selectors.ts        ★ 页面选择器集中配置（最可能需要按真实页面微调的地方）
   steps.ts            各步骤实现（导航 / 上传 CSV / 编辑 / Turn On）
-  schedule.ts         解析排期表（label,date,send_time_strategy）
+  schedule.ts         解析排期表（label,date；send_time_strategy 可选）
   campaigns.ts        从 campaigns/ 自动发现「内容表+排期表」配对
   validate.ts         排期日期格式 / 同日冲突检查（运行时轻量护栏）
   gen-schedule.ts     从内容表 label 生成/同步排期表

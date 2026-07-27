@@ -14,6 +14,8 @@ export interface CliOptions {
   useOpenPage: boolean;
   /** 断点续跑：跳过状态文件里已完成的游戏；已上传未完成的游戏不重复上传。 */
   resume: boolean;
+  /** 上传 CSV 前先批量删除 Completed 通知腾出 active 名额（覆盖 .env 的 DELETE_COMPLETED_BEFORE_UPLOAD）。 */
+  cleanFirst: boolean;
   /** 打印帮助后退出。 */
   help: boolean;
 }
@@ -29,6 +31,7 @@ const HELP = `
   --no-turn-on        本次不执行 Turn On（覆盖 .env 的 AUTO_TURN_ON）
   --use-open-page     不做任何导航，直接接管当前已打开的标签页（从 Create from CSV 开始）
   --resume            断点续跑：跳过已完成的游戏，已上传未完成的游戏不重复上传
+  --clean-first       上传前先批量删除 Completed 通知腾出 active 名额（撞上限兜底逻辑仍保留）
   -h, --help          显示本帮助
 
 示例：
@@ -54,6 +57,7 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
     noTurnOn: false,
     useOpenPage: false,
     resume: false,
+    cleanFirst: false,
     help: false,
   };
 
@@ -87,6 +91,9 @@ export function parseCli(argv: string[] = process.argv.slice(2)): CliOptions {
         break;
       case '--resume':
         opts.resume = true;
+        break;
+      case '--clean-first':
+        opts.cleanFirst = true;
         break;
       case '-h':
       case '--help':

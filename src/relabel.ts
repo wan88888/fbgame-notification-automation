@@ -20,6 +20,7 @@
  */
 import 'dotenv/config';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { basename, join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
@@ -222,4 +223,9 @@ function main(): void {
   }
 }
 
-main();
+// 仅在作为脚本直接运行（npm run relabel / tsx src/relabel.ts）时执行，
+// 被测试等模块 import 时不触发，避免误改真实 CSV。
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
+if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
+  main();
+}

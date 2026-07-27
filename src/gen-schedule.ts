@@ -2,7 +2,6 @@
  * 从 campaigns/推送配置表/*.csv 的 label 列生成 / 同步 schedule/*.schedule.csv。
  *
  * - label：来自内容表（保持顺序）
- * - send_time_strategy：固定为 Predicted Best Time
  * - date：默认自动填充「起始日起连续 N 天（每个 label 一天，含周末）」。
  *         起始日默认为「运行日次日」（运营周二跑 → 周三起）；
  *         可用 --start-date YYYY-MM-DD 或环境变量 SCHEDULE_START_DATE 覆盖。
@@ -31,7 +30,6 @@ const CONTENT_SUBDIR = process.env['CONTENT_SUBDIR'] || DEFAULT_CONTENT_SUBDIR;
 const CONTENT_DIR = resolve(process.cwd(), 'campaigns', CONTENT_SUBDIR);
 const SCHEDULE_DIR = resolve(process.cwd(), 'campaigns/schedule');
 const SCHEDULE_SUFFIX = '.schedule.csv';
-const DEFAULT_STRATEGY = 'Predicted Best Time';
 const NAME_PREFIX = process.env['CONTENT_NAME_PREFIX'] ?? DEFAULT_CONTENT_NAME_PREFIX;
 
 interface GenOptions {
@@ -124,13 +122,10 @@ function extractLabels(contentPath: string): string[] {
   return labels;
 }
 
-function writeSchedule(
-  path: string,
-  rows: { label: string; date: string; send_time_strategy: string }[],
-): void {
-  const lines = ['label,date,send_time_strategy'];
+function writeSchedule(path: string, rows: { label: string; date: string }[]): void {
+  const lines = ['label,date'];
   for (const r of rows) {
-    lines.push([csvEscape(r.label), csvEscape(r.date), csvEscape(r.send_time_strategy)].join(','));
+    lines.push([csvEscape(r.label), csvEscape(r.date)].join(','));
   }
   writeFileSync(path, `${lines.join('\n')}\n`, 'utf-8');
 }
@@ -192,7 +187,7 @@ function main(): void {
       } else {
         date = autoDates[i];
       }
-      return { label, date, send_time_strategy: DEFAULT_STRATEGY };
+      return { label, date };
     });
 
     writeSchedule(schedulePath, rows);

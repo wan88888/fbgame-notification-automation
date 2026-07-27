@@ -43,13 +43,14 @@ function pick(row: Record<string, string>, candidates: string[]): string | undef
 }
 
 /**
- * 解析运营的「排期表」CSV：至少包含 label 与 date 两列，
- * 可选 send_time_strategy（推送类别）。列名大小写/中英文均兼容。
+ * 解析运营的「排期表」CSV：至少包含 label 与 date 两列。
+ * send_time_strategy（推送类别）为可选列，缺省即 Predicted Best Time；
+ * 需要非默认策略时再手动加该列即可。列名大小写/中英文均兼容。
  *
- * 示例：
- *   label,date,send_time_strategy
- *   AHA_001,2026-07-19,Predicted Best Time
- *   AHA_002,2026-07-20,
+ * 示例（常用，仅两列）：
+ *   label,date
+ *   AHA_001,2026-07-19
+ *   AHA_002,2026-07-20
  */
 export function parseScheduleSheet(path: string): NotificationSchedule[] {
   const abs = resolve(process.cwd(), path);

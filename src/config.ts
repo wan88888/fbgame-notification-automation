@@ -71,6 +71,12 @@ export interface AppConfig {
   /** 运行时开关（由命令行覆盖，见 cli.ts）。 */
   dryRun: boolean;
   noUpload: boolean;
+  /**
+   * 上传 CSV 前先批量删除 Status=Completed 的通知，提前腾出 active 名额。
+   * 默认 false（沿用「撞到 10 条 active 上限时才删」的懒删除兜底）。
+   * 由 .env 的 DELETE_COMPLETED_BEFORE_UPLOAD 或命令行 --clean-first 打开。
+   */
+  deleteCompletedBeforeUpload: boolean;
   /** 跳过导航，直接接管当前已打开的标签页（从 Create from CSV 开始）。 */
   useOpenPage: boolean;
   /** 单游戏兜底模式下，Send notifications 页的直达 URL（可选）。 */
@@ -126,6 +132,7 @@ export function loadConfig(): AppConfig {
     closeBrowserOnExit: envBool('CLOSE_BROWSER_ON_EXIT', false),
     dryRun: false,
     noUpload: false,
+    deleteCompletedBeforeUpload: envBool('DELETE_COMPLETED_BEFORE_UPLOAD', false),
     useOpenPage: envBool('USE_OPEN_PAGE', false),
     notificationsUrl: env('NOTIFICATIONS_URL'),
     notificationsUrlTemplate: env('NOTIFICATIONS_URL_TEMPLATE', DEFAULT_NOTIFICATIONS_URL_TEMPLATE),

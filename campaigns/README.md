@@ -6,7 +6,7 @@
 | 位置 | 说明 | 例子 |
 |---|---|---|
 | `推送配置表/推送配置表 - <游戏>.csv` | 内容表：飞书原始导出，**无需改名/清洗**，上传到 Meta「Create from CSV」 | `推送配置表/推送配置表 - AHA.csv` |
-| `schedule/<游戏>.schedule.csv` | 排期表：告诉工具每条推送用哪天、什么发送策略 | `schedule/AHA.schedule.csv` |
+| `schedule/<游戏>.schedule.csv` | 排期表：告诉工具每条推送用哪天（`label,date`） | `schedule/AHA.schedule.csv` |
 
 ```
 campaigns/
@@ -51,19 +51,19 @@ npm run gen-schedule
 | 列 | 来源 |
 |---|---|
 | `label` | 自动取自 `推送配置表/推送配置表 - <游戏>.csv` 的 `label` 列 |
-| `send_time_strategy` | 固定为 `Predicted Best Time` |
 | `date` | **仅此列需人工填写**（`年-月-日`，UTC） |
 
 ```csv
-label,date,send_time_strategy
-AHA_001,2026-07-19,Predicted Best Time
-AHA_002,,Predicted Best Time
-AHA_003,,Predicted Best Time
+label,date
+AHA_001,2026-07-19
+AHA_002,
+AHA_003,
 ```
 
 - `label`：必须和内容表 / Meta 后台列表里的 Label 完全一致（由 `gen-schedule` 保证）。
 - `date`：推荐 `年-月-日`（如 `2026-07-19`），也支持 `月/日/年`。**请用 UTC 日期**。未填日期的行会被跳过、不处理。
-- `send_time_strategy`（推送类别）：一般就是 `Predicted Best Time`。
+- 发送策略：默认就是 `Predicted Best Time`，无需在排期表里体现；工具会自动跳过该步。
+  个别游戏要用非默认策略时，可手动加一列 `send_time_strategy` 并填值（仍兼容识别）。
 
 ## 关于原始表的列（无需清洗）
 

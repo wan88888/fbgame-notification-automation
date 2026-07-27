@@ -77,6 +77,9 @@ async function processGame(
 
   log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
 
+  // 上传前是否已删过 Completed。删过后 Completed 必为 0，撞上限时无需再删。
+  let preCleaned = false;
+
   try {
     // 无论是否上传，日期都会在编辑阶段用到，先拦掉非法日期格式。
     const dateErrors = validateScheduleDates(game.notifications);
@@ -89,6 +92,19 @@ async function processGame(
     warnSameDayConflicts(game);
 
     await navigateToNotifications(page, game, cfg);
+
+    // 可选：上传前先删 Completed 腾出 active 名额（--clean-first / DELETE_COMPLETED_BEFORE_UPLOAD）。
+    // 清理失败只告警、不中断本游戏（撞上限时仍有懒删除兜底）。
+    if (cfg.deleteCompletedBeforeUpload) {
+      try {
+        const cleaned = await deleteCompletedNotifications(page, cfg);
+        preCleaned = true;
+        log.info(`[${game.projectName}] 上传前清理 Completed：删除 ${cleaned} 条。`);
+      } catch (e) {
+        log.warn(`[${game.projectName}] 上传前清理 Completed 失败（忽略，继续）：${(e as Error).message}`);
+      }
+    }
+
     if (skipUpload) {
       const why = resume?.skipUpload ? '续跑：本游戏已上传过' : '--no-upload';
       log.warn(`游戏「${game.projectName}」${why}：跳过 Create from CSV 上传`);
@@ -107,7 +123,9 @@ async function processGame(
 
   let attempted = 0;
   let skipTurnOn = false; // 本游戏命中 active 上限且无法腾位后置真，仅影响本游戏。
-  let cleanupTried = false; // 本游戏是否已尝试过删除 Completed 腾位（每游戏最多一次）。
+  // 是否已（尝试）删除 Completed 腾位。上传前已删过时直接视为已处理：
+  // 撞上限时 Completed 必为 0，无需再删，直接判定「腾不出位」。
+  let cleanupTried = preCleaned;
   const serverErrorLabels: string[] = []; // Save 报「Something went wrong」的条目，稍后统一删除+重传补救。
   for (const [i, notif] of items.entries()) {
     try {
@@ -123,6 +141,8 @@ async function processGame(
           await turnOnNotification(page, notif, cfg);
         } catch (e) {
           // 撞到 10 条 active 上限：删除 Completed 通知腾位后重试一次（每游戏只清理一次）。
+          // 若上传前已删过 Completed（cleanupTried 初始即为 true），此时 Completed 必为 0，
+          // 不再重复删，直接抛给外层按「已达上限、无位可腾」处理。
           if (!isActiveLimit((e as Error).message) || cleanupTried) throw e;
           cleanupTried = true;
           log.warn(`[${game.projectName}] 撞到 10 条 active 上限，尝试删除 Completed 通知腾位 ...`);
@@ -305,6 +325,7 @@ function applyCliOverrides(cfg: AppConfig, opts: CliOptions): void {
   cfg.noUpload = opts.noUpload;
   cfg.resume = opts.resume;
   if (opts.useOpenPage) cfg.useOpenPage = true;
+  if (opts.cleanFirst) cfg.deleteCompletedBeforeUpload = true;
   if (opts.dryRun || opts.noTurnOn) cfg.autoTurnOn = false;
 }
 

@@ -92,7 +92,7 @@ function resolveProjectInfo(
  *
  * 约定：
  *   content/<name>.csv            内容 CSV（原样上传到 Meta 的 Create from CSV）
- *   schedule/<name>.schedule.csv  排期表（label,date,send_time_strategy）
+ *   schedule/<name>.schedule.csv  排期表（label,date；send_time_strategy 可选，缺省即 Predicted Best Time）
  *   projects.json                 可选：{ "<name>": "<Meta 项目显示名>" }
  *
  * 项目名优先取 projects.json 中 <name> 的映射，否则用文件名 <name>。
@@ -148,6 +148,14 @@ export function discoverCampaigns(
       `发现 campaign：${contentSubdir}/${csv} -> 项目「${projectName}」${url ? '（直达 URL）' : ''}，` +
         `${notifications.length} 条推送（排期表 ${SCHEDULE_SUBDIR}/${scheduleFile}）`,
     );
+    // 没匹配到 projects.json（拿不到 appId/url）时，会退化成脆弱的「菜单导航」，
+    // 极易到不了 Send notifications 页。这里显眼告警，便于开跑前就发现并修键名。
+    if (!url) {
+      log.warn(
+        `⚠ 「${name}」未在 projects.json 找到对应 appId/url，将走菜单导航（很可能失败）。` +
+          `请在 campaigns/projects.json 增加键「${name}」并填 appId（键名需与文件名去前缀后完全一致）。`,
+      );
+    }
   }
   return jobs;
 }

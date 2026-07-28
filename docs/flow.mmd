@@ -1,11 +1,17 @@
 flowchart TD
-    A[人：从飞书下载「推送配置表」文件夹] --> B["人：整个存到 campaigns/ 下"]
-    B --> B2["机（可选）：npm run relabel<br/>批量统一 label 补零位数"]
-    B2 --> C[机：npm run gen-schedule<br/>从内容表生成排期表 + 自动填日期]
-    C --> D["人：只填 schedule 的 date 列<br/>每条不同日期"]
-    D --> H[人：确认 AdsPower 已开且已登录 Meta]
-    H --> I[机：./run.sh 或 npm start<br/>自动上传/编辑/Save/Turn On]
-    I --> J[看窗口里的成功/失败汇总]
+    A[人：飞书下载「推送配置表」文件夹] --> B["人：整个存到 campaigns/ 下"]
+    B --> C{人：label 与后台是否重复?}
+    C -->|有重复| C1["机：npm run relabel -- --pad 2<br/>批量补零改 label（--pad 3 = 3 位）"]
+    C -->|不重复| D
+    C1 --> D["机：npm run gen-schedule<br/>生成排期 + 自动填日期（默认本周三~下周二）<br/>可 --start-date 指定起始日"]
+    D --> E["人：检查/微调 date 列（别动 label）"]
+    E --> F["机：npm run check-campaigns<br/>查文件名↔projects.json、排期、日期"]
+    F --> G{全部 ✓ ?}
+    G -->|有 ✗| F1[按提示修好键名/排期后重跑体检]
+    F1 --> F
+    G -->|全 ✓| H[人：确认 AdsPower 窗口已开且已登录 Meta]
+    H --> I[机：./run.sh<br/>自动上传/编辑/Save/Turn On]
+    I --> J[看飞书卡片/窗口的成功失败汇总]
     J --> K{有失败?}
     K -->|有| L[看 screenshots + 对照报错表]
     K -->|没有| M[完成，去后台复核]

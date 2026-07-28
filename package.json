@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/main.ts",
     "gen-schedule": "tsx src/gen-schedule.ts",
+    "check-campaigns": "tsx src/check-campaigns.ts",
     "relabel": "tsx src/relabel.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

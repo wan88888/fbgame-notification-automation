@@ -1,5 +1,6 @@
 /**
- * 开跑前「配置体检」——不开浏览器，几秒扫完 campaigns/，尽早暴露昨天那类问题：
+ * 开跑前「配置体检」——不开浏览器，几秒扫完 campaigns/，尽早暴露常见问题：
+ *   0. 内容表 CSV 能否解析（引号坏了会在 gen-schedule / 上传时炸）。
  *   1. 内容表文件名 → 剥前缀后的游戏名，在 projects.json 里能否匹配到 appId/url
  *      （匹配不到 → 运行时会退化成脆弱的菜单导航，整款失败）。
  *   2. 是否有配套的 schedule/<游戏>.schedule.csv，且里面有已填日期的行。
@@ -8,7 +9,7 @@
  * 用法：
  *   npm run check-campaigns          # 有问题时退出码 = 1，可用于开跑前 gate
  *
- * 只读、无副作用，可放心随时运行。
+ * 只读、无副作用，可放心随时运行。内容表引号问题可用：npm run fix-content-csv
  */
 import 'dotenv/config';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -20,6 +21,7 @@ import {
   DEFAULT_CONTENT_NAME_PREFIX,
   DEFAULT_CONTENT_SUBDIR,
 } from './campaigns.js';
+import { diagnoseContentCsv } from './content-csv.js';
 import { parseScheduleSheet } from './schedule.js';
 import { findSameDayConflicts, validateScheduleDates } from './validate.js';
 
@@ -61,12 +63,29 @@ function loadProjectMap(dirAbs: string): Record<string, ProjectMapEntry> {
 
 function checkOne(
   file: string,
+  contentDir: string,
   scheduleDir: string,
   projectMap: Record<string, ProjectMapEntry>,
 ): CampaignCheck {
   const name = deriveProjectKey(basename(file, '.csv'), NAME_PREFIX);
   const problems: string[] = [];
   const notes: string[] = [];
+
+  // 0) 内容表 CSV 能否解析（比 projects.json / 排期更靠前，gen-schedule 也依赖它）。
+  try {
+    const raw = readFileSync(join(contentDir, file), 'utf-8');
+    const diag = diagnoseContentCsv(raw);
+    if (!diag.ok) {
+      for (const issue of diag.issues) {
+        const hint = issue.fixable ? ' → 可试 npm run fix-content-csv' : '';
+        problems.push(`${issue.message}${hint}`);
+      }
+    } else {
+      notes.push(`内容表 ${diag.labels.length} 条`);
+    }
+  } catch (e) {
+    problems.push(`读取内容表失败：${(e as Error).message}`);
+  }
 
   // 1) projects.json 匹配。
   const cov = resolveCoverage(projectMap[name]);
@@ -138,9 +157,12 @@ function main(): void {
     return;
   }
 
-  const results = files.map((f) => checkOne(f, scheduleDir, projectMap));
+  const results = files.map((f) => checkOne(f, contentDir, scheduleDir, projectMap));
   const okCount = results.filter((r) => r.problems.length === 0).length;
   const badCount = results.length - okCount;
+  const contentCsvBroken = results.some((r) =>
+    r.problems.some((p) => p.includes('内容表') || p.includes('引号') || p.includes('无法解析')),
+  );
 
   console.log('====== campaigns 配置体检 ======');
   for (const r of results) {
@@ -162,6 +184,9 @@ function main(): void {
   console.log('================================');
   console.log(`通过 ${okCount}/${results.length}，问题 ${badCount} 款。`);
   if (badCount > 0) {
+    if (contentCsvBroken) {
+      console.log('内容表 CSV 有格式问题：先试 npm run fix-content-csv（可加 --dry-run 预览），再重跑本命令。');
+    }
     console.log('请先修复上面标 ✗ 的问题，再执行 ./run.sh。');
     process.exitCode = 1;
   } else {

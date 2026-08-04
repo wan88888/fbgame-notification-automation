@@ -8,6 +8,9 @@ import { writeSubsetCsv, isSaveServerError, SAVE_SERVER_ERROR } from '../src/ste
 describe('isSaveServerError', () => {
   it('识别带标记的错误信息', () => {
     expect(isSaveServerError(`${SAVE_SERVER_ERROR}: Save 失败 ...`)).toBe(true);
+    expect(
+      isSaveServerError(`${SAVE_SERVER_ERROR}: Save 后未回到 User Notifications 列表（重试 2 次仍停留在编辑页）`),
+    ).toBe(true);
   });
   it('普通错误返回 false', () => {
     expect(isSaveServerError('滚动列表后仍未找到 label')).toBe(false);

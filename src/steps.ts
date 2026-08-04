@@ -284,9 +284,11 @@ export async function editNotification(
 /**
  * 点击 Save 并校验是否真的保存成功。
  * Meta 保存失败时会弹红色横幅「Something went wrong」（服务端错误，如
- * noncoercible_variable_value/1675012），此时编辑框不会关闭。以前的代码不检测横幅、
- * 无条件打印「已保存」，会把失败误判成功、还接着去 Turn On。这里检测横幅并重试一次，
- * 仍失败则抛错（交由上层记为失败 + 截图）。
+ * noncoercible_variable_value/1675012），此时编辑框不会关闭。
+ * 也存在「无横幅但编辑框不关」的静默失败（Match_5 事故）：以前等列表超时后
+ * 仍误报「已保存」，导致后续 Turn On / 下几条全部找不到行。
+ * 这里：有横幅则重试；无横幅也必须确认已回到列表，否则 Cancel 并抛 SAVE_SERVER_ERROR
+ *（上层会走删除+重传补救）。
  */
 async function clickSaveAndVerify(
   page: Page,
@@ -294,6 +296,8 @@ async function clickSaveAndVerify(
   cfg: AppConfig,
 ): Promise<void> {
   const t = cfg.stepTimeoutMs;
+  /** 回到列表的等待上限：成功通常 1～3s；卡在编辑页时不必空等满 stepTimeout。 */
+  const listWaitMs = Math.min(Math.max(t, 5000), 12000);
   const errorBanner = (): Locator => page.getByText(S.editor.saveErrorText, { exact: false });
   const maxAttempts = 2;
 
@@ -310,10 +314,7 @@ async function clickSaveAndVerify(
         await page.waitForTimeout(2500); // 稍等后重试（这类错误常为临时性）。
         continue;
       }
-      // 仍失败：点 Cancel 关掉编辑框，保持列表干净以便继续处理下一条 / 后续补救。
-      await clickByText(page, S.editor.cancelText, t, cfg.humanize).catch(async () => {
-        await page.keyboard.press('Escape').catch(() => undefined);
-      });
+      await dismissEditor(page, cfg);
       throw new Error(
         `${SAVE_SERVER_ERROR}: Save 失败，Meta 返回「${S.editor.saveErrorText}」` +
           `（noncoercible_variable_value/1675012），重试 ${maxAttempts} 次仍失败。` +
@@ -321,15 +322,59 @@ async function clickSaveAndVerify(
       );
     }
 
-    // 无错误横幅：视为成功，等编辑面板关闭 / 回到列表。
-    await page
-      .getByText(S.notificationsPageHeadingText, { exact: false })
-      .first()
-      .waitFor({ state: 'visible', timeout: t })
-      .catch(() => undefined);
-    log.ok(`[${notif.label}] 编辑已保存`);
-    return;
+    // 无错误横幅：必须真正回到列表，才能算保存成功。
+    if (await waitBackToNotificationsList(page, listWaitMs)) {
+      log.ok(`[${notif.label}] 编辑已保存`);
+      return;
+    }
+
+    log.warn(
+      `[${notif.label}] Save 后未回到列表页（未见「${S.editor.saveErrorText}」横幅，但编辑框可能仍打开）。`,
+    );
+    if (attempt < maxAttempts) {
+      await page.waitForTimeout(1500);
+      continue;
+    }
+    await dismissEditor(page, cfg);
+    throw new Error(
+      `${SAVE_SERVER_ERROR}: Save 后未回到 User Notifications 列表` +
+        `（重试 ${maxAttempts} 次仍停留在编辑页）。将尝试「删除+重传该行」补救。`,
+    );
   }
+}
+
+/** 等待回到通知列表（标题或 Create from CSV 入口可见）；超时返回 false。 */
+async function waitBackToNotificationsList(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  const heading = page.getByText(S.notificationsPageHeadingText, { exact: false }).first();
+  try {
+    await heading.waitFor({ state: 'visible', timeout: timeoutMs });
+    return true;
+  } catch {
+    // 标题找不到时，用上传区相关文案兜底。
+  }
+  const left = Math.max(500, deadline - Date.now());
+  for (const text of S.createFromCsvTexts) {
+    const loc = page.getByText(text, { exact: false }).first();
+    try {
+      if (await loc.count()) {
+        await loc.waitFor({ state: 'visible', timeout: left });
+        return true;
+      }
+    } catch {
+      // 试下一个文案。
+    }
+  }
+  return false;
+}
+
+/** 关闭编辑框（Cancel，失败则 Escape），尽量回到列表以便后续条目继续。 */
+async function dismissEditor(page: Page, cfg: AppConfig): Promise<void> {
+  const t = cfg.stepTimeoutMs;
+  await clickByText(page, S.editor.cancelText, t, cfg.humanize).catch(async () => {
+    await page.keyboard.press('Escape').catch(() => undefined);
+  });
+  await waitBackToNotificationsList(page, Math.min(5000, t));
 }
 
 /**

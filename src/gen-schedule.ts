@@ -19,6 +19,7 @@ import { basename, join, resolve } from 'node:path';
 import { parse } from 'csv-parse/sync';
 import { log } from './logger.js';
 import { csvEscape } from './csv-utils.js';
+import { diagnoseContentCsv } from './content-csv.js';
 import { defaultStartDate, generateDates, isValidDate, toIsoDate } from './date-utils.js';
 import {
   deriveProjectKey,
@@ -102,24 +103,22 @@ function loadExistingSchedule(path: string): ExistingSchedule {
 }
 
 function extractLabels(contentPath: string): string[] {
-  const rows = parse(readFileSync(contentPath, 'utf-8'), {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    bom: true,
-    relax_column_count: true,
-  }) as Record<string, string>[];
-
-  const labels: string[] = [];
-  for (const [i, row] of rows.entries()) {
-    const label = (row['label'] ?? '').trim();
-    if (!label) {
-      log.warn(`${basename(contentPath)} 第 ${i + 2} 行缺少 label，已跳过`);
-      continue;
-    }
-    labels.push(label);
+  const raw = readFileSync(contentPath, 'utf-8');
+  const diag = diagnoseContentCsv(raw);
+  if (!diag.ok) {
+    const details = diag.issues.map((i) => `  - ${i.message}`).join('\n');
+    const canFix = diag.issues.some((i) => i.fixable);
+    throw new Error(
+      `${basename(contentPath)} 内容表 CSV 格式异常，无法生成排期：\n${details}\n` +
+        (canFix
+          ? `可先运行：npm run fix-content-csv -- --dry-run  （确认后去掉 --dry-run 写入），再重跑 gen-schedule。`
+          : `请检查飞书导出的 CSV 引号/换行是否完整，修好后重跑。`),
+    );
   }
-  return labels;
+  if (diag.labels.length === 0) {
+    log.warn(`${basename(contentPath)} 没有有效 label`);
+  }
+  return diag.labels;
 }
 
 function writeSchedule(path: string, rows: { label: string; date: string }[]): void {

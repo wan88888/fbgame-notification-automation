@@ -9,6 +9,8 @@
     "check-campaigns": "tsx src/check-campaigns.ts",
     "fix-content-csv": "tsx src/fix-content-csv.ts",
     "relabel": "tsx src/relabel.ts",
+    "ops:api": "npm --prefix apps/api run start",
+    "ops:web": "npm --prefix apps/web run dev",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -48,6 +50,7 @@
     "vitest": "^4.1.10"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true
+    "esbuild@0.28.1": true,
+    "esbuild@0.25.12": true
   }
 }

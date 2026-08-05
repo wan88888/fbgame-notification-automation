@@ -5,6 +5,8 @@ dist/
 screenshots/
 # 断点续跑状态文件
 .run-state.json
+# 运营控制台任务状态
+.ops-console/
 data/notifications.json
 data/*.csv
 !data/notifications.example.csv
@@ -15,3 +17,6 @@ campaigns/推送配置表/
 # 生成的排期表
 campaigns/schedule/*.csv
 !campaigns/schedule/*.example*.csv
+
+# Vite
+apps/web/dist/

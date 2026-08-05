@@ -11,6 +11,8 @@
 
 > **人**负责放文件、填日期、确认 AdsPower 已登录；**机器**负责生成排期、上传、编辑、Save、Turn On。
 
+> **可选 Web 控制台（方案 A）**：在执行机跑 `npm run ops:api` + `npm run ops:web`，运营用自己电脑浏览器打开页面上传 CSV、点「准备/推送」。说明见 [`apps/README.md`](apps/README.md)。CLI / `./run.sh` 仍可用。
+
 1. 把飞书下载的「推送配置表」文件夹整个存到 `campaigns/` 下（里面是 `推送配置表 - <游戏>.csv`，**无需改名/清洗**）。2.（可选）`npm run relabel`：批量统一 label 结尾数字的补零位数（如 `AHA_1`→`AHA_01`，`--pad 3` 补 3 位）。
 2. `npm run gen-schedule`：从内容表生成排期表（并自动填日期）。
 3. 打开 `schedule/<游戏>.schedule.csv`，**只填 `date` 列**（每条**不同日期**）。

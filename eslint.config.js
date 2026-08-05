@@ -15,6 +15,8 @@ export default tseslint.config(
       'logs/**',
       'docs/**',
       'coverage/**',
+      'apps/web/**',
+      '.ops-console/**',
     ],
   },
 
@@ -22,7 +24,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
 
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'apps/api/src/**/*.ts'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

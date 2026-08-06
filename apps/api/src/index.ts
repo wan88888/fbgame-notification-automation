@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { createJob, getJob, listJobs, type JobType } from './jobs.js';
 import { enqueueJob, REPO_ROOT } from './runner.js';
-import { contentDir, saveUploadedCsv } from './upload.js';
+import { clearCampaignFiles, contentDir, saveUploadedCsv } from './upload.js';
 
 const PORT = Number(process.env['OPS_API_PORT'] || 8787);
 const TOKEN = (process.env['OPS_API_TOKEN'] || '').trim();
@@ -20,7 +20,7 @@ app.use(
   '*',
   cors({
     origin: (origin) => origin || '*',
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
   }),
 );
@@ -89,8 +89,17 @@ app.post('/api/files/upload', async (c) => {
   return c.json({
     saved,
     contentDir: contentDir(),
-    hint: '上传后建议先点「准备（修复+排期+体检）」，全部通过再「开始推送」。',
+    hint: '上传后建议先点「准备」，全部通过再「开始推送」。',
   });
+});
+
+/**
+ * 清空 campaigns/推送配置表/ 与 campaigns/schedule/ 下的文件（不限扩展名）。
+ * 不递归子目录（如调试备份文件夹会保留）。
+ */
+app.delete('/api/files/campaigns', (c) => {
+  const { deleted } = clearCampaignFiles();
+  return c.json({ deleted, count: deleted.length });
 });
 
 console.log(`[ops-api] repo root: ${REPO_ROOT}`);

@@ -36,6 +36,12 @@ export function uploadFiles(files: File[]) {
   });
 }
 
+export function clearCampaignFiles() {
+  return api<{ deleted: string[]; count: number }>('/api/files/campaigns', {
+    method: 'DELETE',
+  });
+}
+
 export function createJob(type: JobType, args: string[] = []) {
   return api<{ job: Job }>('/api/jobs', {
     method: 'POST',

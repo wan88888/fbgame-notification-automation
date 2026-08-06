@@ -44,6 +44,24 @@ body {
   margin-bottom: 16px;
 }
 
+.ops-upload .ant-upload-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ops-upload .ant-upload-drag-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.ops-upload .ant-upload-drag-icon {
+  margin-bottom: 8px;
+}
+
 .log-box {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;

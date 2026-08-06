@@ -1,12 +1,18 @@
-/** 上传内容表 CSV 到 campaigns/推送配置表/ */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+/** 上传 / 清理 campaigns 下的内容表与排期表 CSV */
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join, relative } from 'node:path';
 import { REPO_ROOT } from './runner.js';
 
 const CONTENT_SUBDIR = process.env['CONTENT_SUBDIR'] || '推送配置表';
 
 export function contentDir(): string {
   const dir = join(REPO_ROOT, 'campaigns', CONTENT_SUBDIR);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export function scheduleDir(): string {
+  const dir = join(REPO_ROOT, 'campaigns', 'schedule');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -30,4 +36,18 @@ export function saveUploadedCsv(filename: string, data: Uint8Array | Buffer): Sa
   const dest = join(dir, safe);
   writeFileSync(dest, data);
   return { originalName: filename, savedAs: safe, bytes: data.byteLength };
+}
+
+/** 清空内容表目录与排期目录中的文件（不限扩展名；子目录保留，避免误删备份）。 */
+export function clearCampaignFiles(): { deleted: string[] } {
+  const deleted: string[] = [];
+  for (const dir of [contentDir(), scheduleDir()]) {
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      if (!statSync(abs).isFile()) continue;
+      unlinkSync(abs);
+      deleted.push(relative(REPO_ROOT, abs));
+    }
+  }
+  return { deleted };
 }

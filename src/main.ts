@@ -2,7 +2,7 @@ import { loadConfig, resolveGames } from './config.js';
 import { parseCli, printHelp } from './cli.js';
 import type { CliOptions } from './cli.js';
 import { startBrowser, stopBrowser, isActive } from './adspower.js';
-import { connectBrowser, getPage, screenshotOnError } from './playwright-utils.js';
+import { connectBrowser, getPage, screenshotOnError, isRowMissingError } from './playwright-utils.js';
 import {
   navigateToNotifications,
   uploadCsv,
@@ -12,6 +12,7 @@ import {
   deleteNotificationsByLabels,
   writeSubsetCsv,
   isSaveServerError,
+  waitForNotificationsListReady,
 } from './steps.js';
 import { resolve } from 'node:path';
 import type { AppConfig } from './config.js';
@@ -128,7 +129,7 @@ async function processGame(
   let cleanupTried = preCleaned;
   const serverErrorLabels: string[] = []; // Save 报「Something went wrong」的条目，稍后统一删除+重传补救。
   for (const [i, notif] of items.entries()) {
-    try {
+    const runOne = async (): Promise<void> => {
       await editNotification(page, notif, cfg);
       if (cfg.autoTurnOn) {
         // 本游戏此前已撞上限且无法腾位：本条虽已保存，但无法 Turn On，如实记为失败（不算成功）。
@@ -153,9 +154,22 @@ async function processGame(
               { cause: e },
             );
           }
-          // 腾位成功，重试当前条目的 Turn On（再失败则由外层捕获）。
           await turnOnNotification(page, notif, cfg);
         }
+      }
+    };
+
+    try {
+      try {
+        await runOne();
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (!isRowMissingError(msg)) throw e;
+        log.warn(`[${game.projectName}][${notif.label}] 未找到行，等待列表后重试一次 ...`);
+        await page.keyboard.press('Escape').catch(() => undefined);
+        await waitForNotificationsListReady(page, Math.min(15000, cfg.stepTimeoutMs));
+        await page.waitForTimeout(2000);
+        await runOne();
       }
       result.succeeded += 1;
     } catch (e) {

@@ -143,10 +143,20 @@ export async function uploadCsv(page: Page, csvPath: string, cfg: AppConfig): Pr
     log.ok('已通过文件选择框提交 CSV 文件');
   }
 
-  if (cfg.postUploadWaitMs > 0) {
-    log.info(`等待批量创建完成 (${cfg.postUploadWaitMs}ms) ...`);
-    await page.waitForTimeout(cfg.postUploadWaitMs);
+  const settleMs = cfg.postUploadWaitMs > 0 ? cfg.postUploadWaitMs : 0;
+  if (settleMs > 0) {
+    log.info(`等待批量创建完成 (${settleMs}ms) ...`);
+    await page.waitForTimeout(settleMs);
   }
+  const listWait = Math.max(15000, cfg.stepTimeoutMs);
+  log.info(`等待回到 User Notifications 列表（最多 ${listWait}ms）...`);
+  const back = await waitForNotificationsListReady(page, listWait);
+  if (!back) {
+    throw new Error(
+      '上传 CSV 后未回到 User Notifications 列表。批量创建可能尚未完成，请稍后重跑或加大 POST_UPLOAD_WAIT_MS。',
+    );
+  }
+  log.ok('已回到 User Notifications 列表');
 }
 
 /** 若尚未进入虚线上传区页面，则点击「Create from CSV」进入。 */
@@ -343,27 +353,51 @@ async function clickSaveAndVerify(
   }
 }
 
-/** 等待回到通知列表（标题或 Create from CSV 入口可见）；超时返回 false。 */
+/** 等待回到通知列表：标题可见，且 CSV 上传区文案已消失。 */
+export async function waitForNotificationsListReady(
+  page: Page,
+  timeoutMs: number,
+): Promise<boolean> {
+  const heading = page.getByText(S.notificationsPageHeadingText, { exact: false }).first();
+  try {
+    await heading.waitFor({ state: 'visible', timeout: timeoutMs });
+  } catch {
+    return false;
+  }
+
+  const deadline = Date.now() + Math.min(8000, timeoutMs);
+  while (Date.now() < deadline) {
+    let uploadVisible = false;
+    for (const text of S.chooseFileTexts) {
+      const loc = page.getByText(text, { exact: false }).first();
+      if (await loc.isVisible().catch(() => false)) {
+        uploadVisible = true;
+        break;
+      }
+    }
+    if (!uploadVisible) return true;
+    await page.waitForTimeout(250);
+  }
+  return true;
+}
+
+/** 等待回到通知列表（标题或列表页「Create from CSV」按钮可见）；超时返回 false。 */
 async function waitBackToNotificationsList(page: Page, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
   const heading = page.getByText(S.notificationsPageHeadingText, { exact: false }).first();
   try {
     await heading.waitFor({ state: 'visible', timeout: timeoutMs });
     return true;
   } catch {
-    // 标题找不到时，用上传区相关文案兜底。
+    // 标题找不到时，用列表页按钮文案兜底（不要用上传区标题，那会把仍停在上传页误判为成功）。
   }
-  const left = Math.max(500, deadline - Date.now());
-  for (const text of S.createFromCsvTexts) {
-    const loc = page.getByText(text, { exact: false }).first();
-    try {
-      if (await loc.count()) {
-        await loc.waitFor({ state: 'visible', timeout: left });
-        return true;
-      }
-    } catch {
-      // 试下一个文案。
+  const loc = page.getByText(S.createFromCsvText, { exact: true }).first();
+  try {
+    if (await loc.count()) {
+      await loc.waitFor({ state: 'visible', timeout: Math.min(5000, timeoutMs) });
+      return true;
     }
+  } catch {
+    // 未回到列表。
   }
   return false;
 }
@@ -431,46 +465,80 @@ export async function deleteCompletedNotifications(page: Page, cfg: AppConfig): 
 
   log.step(`检测到 ${total} 条 Completed 通知，勾选后批量删除以腾出 active 名额 ...`);
 
-  // 逐行勾选 Completed 行的复选框（勾选不改变行数，可按索引遍历同一批快照）。
-  const rows = completedRows();
-  let checked = 0;
-  for (let i = 0; i < total; i++) {
-    const row = rows.nth(i);
-    await row.scrollIntoViewIfNeeded({ timeout: t }).catch(() => undefined);
-    const box = row.getByRole('checkbox').first();
-    if (!(await box.count())) {
-      log.warn(`第 ${i + 1}/${total} 条 Completed 行未找到复选框，跳过勾选。`);
-      continue;
-    }
-    const already = await box.isChecked().catch(() => false);
-    if (!already) await humanClick(page, box, hz, t);
-    checked += 1;
-    await think(hz);
+  try {
+    await selectRowsAndDelete(
+      page,
+      cfg,
+      async () => {
+        const rows = completedRows();
+        const n = await rows.count();
+        let checked = 0;
+        for (let i = 0; i < n; i++) {
+          const row = rows.nth(i);
+          await row.scrollIntoViewIfNeeded({ timeout: t }).catch(() => undefined);
+          if (await ensureRowChecked(page, row, hz, t)) checked += 1;
+          else log.warn(`第 ${i + 1}/${n} 条 Completed 行未能勾选。`);
+          await think(hz);
+        }
+        return checked;
+      },
+      `Completed ${total} 条`,
+    );
+  } catch (e) {
+    log.warn(`第一次批量删除失败，Escape 后重试一次：${(e as Error).message}`);
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(800);
+    await selectRowsAndDelete(
+      page,
+      cfg,
+      async () => {
+        const rows = completedRows();
+        const n = await rows.count();
+        let checked = 0;
+        for (let i = 0; i < n; i++) {
+          const row = rows.nth(i);
+          await row.scrollIntoViewIfNeeded({ timeout: t }).catch(() => undefined);
+          if (await ensureRowChecked(page, row, hz, t)) checked += 1;
+          await think(hz);
+        }
+        return checked;
+      },
+      `Completed ${total} 条`,
+    );
   }
 
-  if (checked === 0) {
-    log.warn('未能勾选任何 Completed 行，放弃批量删除。');
-    return 0;
+  const remaining = await countAfterDeletion(page, () => completedRows().count(), total, t);
+  const removed = Math.max(total - remaining, 0);
+  log.ok(`批量删除完成：删除 ${removed}/${total} 条 Completed 通知（剩余 Completed ${remaining}）。`);
+  if (removed === 0) {
+    log.warn('Completed 通知一条都没删掉。请检查勾选是否生效、Delete 确认弹窗是否弹出。');
   }
+  return removed;
+}
 
-  // 点击列表右上角的「Delete」按钮（确认弹窗此时尚未出现，取第一个即工具栏按钮）。
-  log.step(`已勾选 ${checked} 行，点击右上角「Delete」批量删除 ...`);
-  const toolbarDelete = page
-    .getByRole('button', { name: S.batchDelete.deleteButtonText, exact: true })
-    .first();
-  await humanClick(page, toolbarDelete, hz, t);
-  await think(hz);
+/**
+ * 统计删除后仍存在的行数。
+ * 删除已生效但列表未就地刷新时，行会滞留在 DOM 里导致误报「删除 0 条」，
+ * 因此等不到行数下降就刷新页面，以服务端最新状态为准。
+ */
+async function countAfterDeletion(
+  page: Page,
+  countRemaining: () => Promise<number>,
+  before: number,
+  timeoutMs: number,
+): Promise<number> {
+  const deadline = Date.now() + Math.min(8000, timeoutMs);
+  let remaining = await countRemaining();
+  while (remaining >= before && Date.now() < deadline) {
+    await page.waitForTimeout(400);
+    remaining = await countRemaining();
+  }
+  if (remaining < before) return remaining;
 
-  // 二次确认弹窗（"Are you sure you want to delete N notifications?"）-> Delete。
-  await confirmDeletion(page, cfg);
-
-  // 等列表刷新（被删的行消失）。
-  await page.waitForTimeout(1500);
-
-  const remaining = await completedRows().count();
-  const deleted = Math.max(total - remaining, 0);
-  log.ok(`批量删除完成：删除 ${deleted}/${total} 条 Completed 通知（剩余 Completed ${remaining}）。`);
-  return deleted;
+  log.info('列表行数未下降，刷新页面后重新统计 ...');
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+  await waitForNotificationsListReady(page, Math.min(20000, Math.max(timeoutMs, 15000)));
+  return countRemaining();
 }
 
 /**
@@ -504,14 +572,8 @@ export async function deleteNotificationsByLabels(
       continue;
     }
     await row.scrollIntoViewIfNeeded({ timeout: t }).catch(() => undefined);
-    const box = row.getByRole('checkbox').first();
-    if (!(await box.count())) {
-      log.warn(`行「${label}」未找到复选框，跳过勾选。`);
-      continue;
-    }
-    const already = await box.isChecked().catch(() => false);
-    if (!already) await humanClick(page, box, hz, t);
-    checked += 1;
+    if (await ensureRowChecked(page, row, hz, t)) checked += 1;
+    else log.warn(`行「${label}」未能勾选。`);
     await think(hz);
   }
 
@@ -520,18 +582,15 @@ export async function deleteNotificationsByLabels(
     return 0;
   }
 
-  log.step(`已勾选 ${checked} 行，点击右上角「Delete」批量删除 ...`);
-  const toolbarDelete = page
-    .getByRole('button', { name: S.batchDelete.deleteButtonText, exact: true })
-    .first();
-  await humanClick(page, toolbarDelete, hz, t);
-  await think(hz);
-  await confirmDeletion(page, cfg);
-  await page.waitForTimeout(1500);
+  await clickToolbarDeleteAndConfirm(page, cfg, checked);
 
-  // 统计仍存在的目标行，估算实删条数。
-  let remaining = 0;
-  for (const label of targets) remaining += (await rowOf(label).count()) > 0 ? 1 : 0;
+  const countTargets = async (): Promise<number> => {
+    let n = 0;
+    for (const label of targets) n += (await rowOf(label).count()) > 0 ? 1 : 0;
+    return n;
+  };
+  const remaining = await countAfterDeletion(page, countTargets, checked, t);
+
   const deleted = Math.max(checked - remaining, 0);
   log.ok(`按 label 删除完成：删除 ${deleted}/${checked} 条（仍存在 ${remaining}）。`);
   return deleted;
@@ -571,23 +630,87 @@ export function writeSubsetCsv(csvAbs: string, labels: string[]): string {
   return outPath;
 }
 
-/** 处理「Deletion Confirmation」弹窗，点击确认删除。 */
+async function rowCheckbox(row: Locator): Promise<Locator | null> {
+  const byRole = row.getByRole('checkbox').first();
+  if (await byRole.count()) return byRole;
+  const byInput = row.locator('input[type="checkbox"]').first();
+  if (await byInput.count()) return byInput;
+  const byAria = row.locator('[aria-checked]').first();
+  if (await byAria.count()) return byAria;
+  return null;
+}
+
+async function ensureRowChecked(
+  page: Page,
+  row: Locator,
+  hz: AppConfig['humanize'],
+  timeoutMs: number,
+): Promise<boolean> {
+  const box = await rowCheckbox(row);
+  if (!box) return false;
+  if (await box.isChecked().catch(() => false)) return true;
+  await humanClick(page, box, hz, timeoutMs).catch(() => undefined);
+  if (await box.isChecked().catch(() => false)) return true;
+  await box.check({ force: true, timeout: timeoutMs }).catch(() => undefined);
+  return box.isChecked().catch(() => false);
+}
+
+async function selectRowsAndDelete(
+  page: Page,
+  cfg: AppConfig,
+  checkRows: () => Promise<number>,
+  what: string,
+): Promise<number> {
+  const checked = await checkRows();
+  if (checked === 0) {
+    log.warn(`未能勾选任何 ${what}，放弃批量删除。`);
+    return 0;
+  }
+  await clickToolbarDeleteAndConfirm(page, cfg, checked);
+  return checked;
+}
+
+async function clickToolbarDeleteAndConfirm(
+  page: Page,
+  cfg: AppConfig,
+  checked: number,
+): Promise<void> {
+  const t = cfg.stepTimeoutMs;
+  log.step(`已勾选 ${checked} 行，点击右上角「Delete」批量删除 ...`);
+  const toolbarDelete = page
+    .getByRole('button', { name: S.batchDelete.deleteButtonText, exact: true })
+    .first();
+  await toolbarDelete.waitFor({ state: 'visible', timeout: t });
+  const enabledUntil = Date.now() + Math.min(8000, t);
+  while (Date.now() < enabledUntil && !(await toolbarDelete.isEnabled().catch(() => false))) {
+    await page.waitForTimeout(200);
+  }
+  if (!(await toolbarDelete.isEnabled().catch(() => false))) {
+    throw new Error('勾选后工具栏 Delete 仍禁用，勾选可能未生效。');
+  }
+  await humanClick(page, toolbarDelete, cfg.humanize, t);
+  await think(cfg.humanize);
+  await confirmDeletion(page, cfg);
+}
+
+/** 处理「Deletion Confirmation」弹窗，点击确认删除。弹窗未出现则失败，避免空点。 */
 async function confirmDeletion(page: Page, cfg: AppConfig): Promise<void> {
   const t = cfg.stepTimeoutMs;
   const title = page.getByText(S.deleteConfirm.titleText, { exact: false }).first();
-  await title.waitFor({ state: 'visible', timeout: t }).catch(() => undefined);
+  try {
+    await title.waitFor({ state: 'visible', timeout: Math.min(8000, t) });
+  } catch {
+    throw new Error(
+      '点击 Delete 后未出现 Deletion Confirmation 弹窗（勾选可能未生效，或按钮点到了别处）。',
+    );
+  }
 
-  // 优先在弹窗容器（role=dialog）内点确认按钮，避免误点右上角禁用的 Delete。
   const dialog = page.getByRole('dialog');
-  const scope = (await dialog.count()) ? dialog.first() : undefined;
-  const confirmBtn = scope
-    ? scope.getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true })
-    : // 无 role=dialog 时兜底：取最后一个同名按钮（弹窗按钮通常晚于页面顶部按钮渲染）。
-      page.getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true }).last();
+  const confirmBtn = (await dialog.count())
+    ? dialog.first().getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true })
+    : page.getByRole('button', { name: S.deleteConfirm.confirmButtonText, exact: true }).last();
 
   await humanClick(page, confirmBtn.first(), cfg.humanize, t);
-
-  // 等弹窗关闭。
   await title.waitFor({ state: 'hidden', timeout: t }).catch(() => undefined);
 }
 

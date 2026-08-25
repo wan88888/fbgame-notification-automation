@@ -110,44 +110,62 @@ export function findRow(page: Page, label: string): Locator {
   return asRow;
 }
 
+export function isRowMissingError(message: string): boolean {
+  return /仍未找到 label/.test(message) || /未能定位到「.+」行的/.test(message);
+}
+
+async function locateLabelText(page: Page, label: string, timeoutMs: number): Promise<Locator | null> {
+  const node = page.getByText(label, { exact: true }).first();
+  if (!(await node.count())) return null;
+  await node.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
+  if (await node.count()) return node;
+  return null;
+}
+
+async function moveMouseToListArea(page: Page): Promise<void> {
+  const heading = page.getByText(selectors.notificationsPageHeadingText, { exact: false }).first();
+  const box = (await heading.count())
+    ? await heading.boundingBox().catch(() => null)
+    : null;
+  const cx = box ? box.x + box.width / 2 : 600;
+  const cy = box ? box.y + Math.min(box.height + 200, 400) : 400;
+  await page.mouse.move(cx, cy).catch(() => undefined);
+}
+
 /**
  * 把目标 label 所在行滚动进视野。
- * 列表是可滚动容器 / 虚拟列表时，上传的新行往往在下方、初始不可见甚至未渲染，
- * 这里先直接尝试 scrollIntoView；找不到就在列表区域滚轮下滑并重试，触发渲染。
+ * 上传后可能仍停在 CSV 上传区；列表也可能是虚拟列表，行在下方未渲染。
+ * 先等列表标题出现，再向上滚回顶部、再向下滚触发渲染。
  */
 export async function scrollRowIntoView(
   page: Page,
   label: string,
   timeoutMs: number,
 ): Promise<Locator> {
-  const node = page.getByText(label, { exact: true }).first();
+  const deadline = Date.now() + Math.max(4000, timeoutMs);
+  const heading = page.getByText(selectors.notificationsPageHeadingText, { exact: false }).first();
+  await heading.waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 15000) }).catch(() => undefined);
 
-  // 快速路径：已在 DOM 里，直接滚进视野。
-  if (await node.count()) {
-    await node.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
-    if (await node.count()) return node;
-  }
+  const found = await locateLabelText(page, label, timeoutMs);
+  if (found) return found;
 
-  // 把鼠标移到列表区域中心，便于滚轮作用到正确的滚动容器。
-  const anchor = (await page
-    .getByText(selectors.notificationsPageHeadingText, { exact: false })
-    .count())
-    ? page.getByText(selectors.notificationsPageHeadingText, { exact: false }).first()
-    : node;
-  const box = await anchor.boundingBox().catch(() => null);
-  const cx = box ? box.x + box.width / 2 : 600;
-  const cy = box ? box.y + Math.min(box.height + 200, 400) : 400;
-  await page.mouse.move(cx, cy).catch(() => undefined);
+  await moveMouseToListArea(page);
 
-  const maxScrolls = 30;
-  for (let i = 0; i < maxScrolls; i++) {
-    await page.mouse.wheel(0, 700);
-    await page.waitForTimeout(250);
-    if (await node.count()) {
-      await node.scrollIntoViewIfNeeded({ timeout: timeoutMs }).catch(() => undefined);
-      if (await node.count()) return node;
+  const wheel = async (dy: number, times: number): Promise<Locator | null> => {
+    for (let i = 0; i < times; i++) {
+      if (Date.now() > deadline) break;
+      await page.mouse.wheel(0, dy);
+      await page.waitForTimeout(200);
+      const hit = await locateLabelText(page, label, timeoutMs);
+      if (hit) return hit;
     }
-  }
+    return null;
+  };
+
+  // 先回顶（避免停在上传区时越往下滚越远），再往下找，最后再扫一遍顶部。
+  const hit =
+    (await wheel(-900, 10)) ?? (await wheel(700, 40)) ?? (await wheel(-900, 12));
+  if (hit) return hit;
 
   throw new Error(
     `滚动列表后仍未找到 label「${label}」所在行。请确认该 label 已成功创建，或检查列表是否需要额外筛选。`,

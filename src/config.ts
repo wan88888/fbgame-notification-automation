@@ -126,7 +126,7 @@ export function loadConfig(): AppConfig {
     slowMoMs: envInt('SLOW_MO_MS', 50),
     stepTimeoutMs: envInt('STEP_TIMEOUT_MS', 30000),
     autoTurnOn: envBool('AUTO_TURN_ON', true),
-    postUploadWaitMs: envInt('POST_UPLOAD_WAIT_MS', 5000),
+    postUploadWaitMs: envInt('POST_UPLOAD_WAIT_MS', 8000),
     screenshotDir: env('SCREENSHOT_DIR', './screenshots'),
     logDir: env('LOG_DIR', './logs'),
     closeBrowserOnExit: envBool('CLOSE_BROWSER_ON_EXIT', false),

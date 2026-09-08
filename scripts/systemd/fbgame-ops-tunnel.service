@@ -1,0 +1,14 @@
+[Unit]
+Description=fbgame ops Cloudflare quick tunnel
+After=network-online.target fbgame-ops-web.service
+Wants=fbgame-ops-web.service
+
+[Service]
+Type=simple
+Environment=PATH=/home/pp_xnt/.nvm/versions/node/v24.18.0/bin:/home/pp_xnt/.local/bin:/usr/bin:/bin
+ExecStart=/home/pp_xnt/fbgame-notification-automation/scripts/ops-tunnel.sh
+Restart=always
+RestartSec=8
+
+[Install]
+WantedBy=default.target

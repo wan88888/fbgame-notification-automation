@@ -1,0 +1,14 @@
+[Unit]
+Description=fbgame ops API (8787)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pp_xnt/fbgame-notification-automation
+Environment=PATH=/home/pp_xnt/.nvm/versions/node/v24.18.0/bin:/home/pp_xnt/.local/bin:/usr/bin:/bin
+ExecStart=/home/pp_xnt/.nvm/versions/node/v24.18.0/bin/npm run ops:api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

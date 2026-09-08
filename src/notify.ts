@@ -254,17 +254,13 @@ export function buildFeishuCard(summary: RunSummary): FeishuCard {
 }
 
 /**
- * 向飞书自定义机器人推送本次运行结果（交互卡片）。
- * - 未配置 webhookUrl 时静默跳过（不影响主流程）。
- * - 任何网络/接口错误只记 warn，不抛出，避免影响退出码。
+ * 向飞书自定义机器人推送 JSON 消息。
+ * 未配置 webhook 则跳过；网络错误只记 warn，不抛出。
  */
-export async function notifyFeishu(cfg: FeishuConfig, summary: RunSummary): Promise<void> {
+export async function postFeishu(cfg: FeishuConfig, payload: Record<string, unknown>): Promise<void> {
   if (!cfg.webhookUrl) return;
 
-  const body: Record<string, unknown> = {
-    msg_type: 'interactive',
-    card: buildFeishuCard(summary),
-  };
+  const body: Record<string, unknown> = { ...payload };
   if (cfg.signSecret) {
     const timestamp = Math.floor(Date.now() / 1000);
     body.timestamp = String(timestamp);
@@ -280,7 +276,6 @@ export async function notifyFeishu(cfg: FeishuConfig, summary: RunSummary): Prom
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    // 飞书即便参数有误也可能返回 HTTP 200，但 body.code !== 0，需一并检查。
     const data = (await res.json().catch(() => ({}))) as { code?: number; msg?: string };
     if (!res.ok || (data.code !== undefined && data.code !== 0)) {
       log.warn(`飞书通知发送失败：HTTP ${res.status}${data.msg ? ` - ${data.msg}` : ''}`);
@@ -294,4 +289,47 @@ export async function notifyFeishu(cfg: FeishuConfig, summary: RunSummary): Prom
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 向飞书自定义机器人推送本次运行结果（交互卡片）。
+ * - 未配置 webhookUrl 时静默跳过（不影响主流程）。
+ * - 任何网络/接口错误只记 warn，不抛出，避免影响退出码。
+ */
+export async function notifyFeishu(cfg: FeishuConfig, summary: RunSummary): Promise<void> {
+  await postFeishu(cfg, {
+    msg_type: 'interactive',
+    card: buildFeishuCard(summary),
+  });
+}
+
+/** 隧道公网地址变化时通知运营。 */
+export async function notifyFeishuTunnelUrl(cfg: FeishuConfig, url: string): Promise<void> {
+  await postFeishu(cfg, {
+    msg_type: 'interactive',
+    card: {
+      header: {
+        template: 'blue',
+        title: { tag: 'plain_text', content: '运营控制台远程地址已更新' },
+      },
+      elements: [
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: `新地址：[${url}](${url})`,
+          },
+        },
+        {
+          tag: 'note',
+          elements: [
+            {
+              tag: 'plain_text',
+              content: '临时隧道重启后会换新链接。本机访问仍是 http://127.0.0.1:5173',
+            },
+          ],
+        },
+      ],
+    },
+  });
 }

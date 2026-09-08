@@ -28,7 +28,25 @@ npm run ops:web
 本机访问：http://127.0.0.1:5173  
 局域网访问：http://<执行机IP>:5173 （防火墙放行 **5173**；开发模式下 API 经 Vite 代理，一般不必对局域网开 8787）
 
-改完 API 代码后需**重启** `npm run ops:api`。
+改完 API 代码后需**重启** `npm run ops:api`（若已装 systemd 服务：`systemctl --user restart fbgame-ops-api`）。
+
+### 开机自启 / 固定远程地址
+
+Cursor 关掉后，在会话里启动的进程会一起停；`trycloudflare.com` 临时隧道每次重开地址都会变。
+
+**关掉 Cursor 也不停（推荐先做）：**
+
+```bash
+bash scripts/install-ops-services.sh
+systemctl --user start fbgame-ops-api fbgame-ops-web fbgame-ops-tunnel
+cat .ops-console/tunnel-url.txt
+```
+
+注销后仍要跑的话，执行一次：`sudo loginctl enable-linger $USER`
+
+临时隧道在**进程一直活着**时地址不变；机器重启后仍会换新域名。
+
+**永久固定域名：** 需要 Cloudflare 账号，以及一个托管在 Cloudflare 上的域名，做成「命名隧道」（例如 `https://ops.你的域名`）。没有域名时临时隧道无法永久固定。
 
 可选环境变量（执行机）：
 

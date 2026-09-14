@@ -2,7 +2,12 @@ import { loadConfig, resolveGames } from './config.js';
 import { parseCli, printHelp } from './cli.js';
 import type { CliOptions } from './cli.js';
 import { startBrowser, stopBrowser, isActive } from './adspower.js';
-import { connectBrowser, getPage, screenshotOnError, isRowMissingError } from './playwright-utils.js';
+import {
+  connectBrowser,
+  getPage,
+  screenshotOnError,
+  isRowMissingError,
+} from './playwright-utils.js';
 import {
   navigateToNotifications,
   uploadCsv,
@@ -15,6 +20,7 @@ import {
   waitForNotificationsListReady,
 } from './steps.js';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AppConfig } from './config.js';
 import type { ResolvedGameJob, GameResult } from './types.js';
 import { log, initFileLogging, getLogFile } from './logger.js';
@@ -58,7 +64,7 @@ function warnSameDayConflicts(game: ResolvedGameJob): void {
   }
 }
 
-async function processGame(
+export async function processGame(
   page: Page,
   game: ResolvedGameJob,
   cfg: AppConfig,
@@ -68,15 +74,21 @@ async function processGame(
   const items = game.notifications.slice(0, budget);
   const result: GameResult = {
     projectName: game.projectName,
-    total: items.length,
+    total: game.notifications.length,
     succeeded: 0,
-    failedLabels: [],
+    failedLabels: game.notifications.slice(items.length).map((notif) => ({
+      label: notif.label,
+      error: 'RUN_LIMIT: 已达单次运行条数上限，本条未处理，请提高 MAX_ITEMS_PER_RUN 后续跑。',
+    })),
   };
 
   // 本游戏是否跳过上传：命令行 --no-upload，或续跑时本游戏已上传过。
   const skipUpload = cfg.noUpload || resume?.skipUpload === true;
 
-  log.info(`===== 开始处理游戏「${game.projectName}」，本次将处理 ${result.total} 条推送 =====`);
+  log.info(
+    `===== 开始处理游戏「${game.projectName}」，本次将处理 ${items.length}/${result.total} 条推送 =====`,
+  );
+  if (resume) markGameProgress(resume.path, resume.state, game.projectName, { completed: false });
 
   // 上传前是否已删过 Completed。删过后 Completed 必为 0，撞上限时无需再删。
   let preCleaned = false;
@@ -96,13 +108,15 @@ async function processGame(
 
     // 可选：上传前先删 Completed 腾出 active 名额（--clean-first / DELETE_COMPLETED_BEFORE_UPLOAD）。
     // 清理失败只告警、不中断本游戏（撞上限时仍有懒删除兜底）。
-    if (cfg.deleteCompletedBeforeUpload) {
+    if (cfg.deleteCompletedBeforeUpload && !cfg.sopSafeMode) {
       try {
         const cleaned = await deleteCompletedNotifications(page, cfg);
         preCleaned = true;
         log.info(`[${game.projectName}] 上传前清理 Completed：删除 ${cleaned} 条。`);
       } catch (e) {
-        log.warn(`[${game.projectName}] 上传前清理 Completed 失败（忽略，继续）：${(e as Error).message}`);
+        log.warn(
+          `[${game.projectName}] 上传前清理 Completed 失败（忽略，继续）：${(e as Error).message}`,
+        );
       }
     }
 
@@ -144,7 +158,7 @@ async function processGame(
           // 撞到 10 条 active 上限：删除 Completed 通知腾位后重试一次（每游戏只清理一次）。
           // 若上传前已删过 Completed（cleanupTried 初始即为 true），此时 Completed 必为 0，
           // 不再重复删，直接抛给外层按「已达上限、无位可腾」处理。
-          if (!isActiveLimit((e as Error).message) || cleanupTried) throw e;
+          if (!isActiveLimit((e as Error).message) || cleanupTried || cfg.sopSafeMode) throw e;
           cleanupTried = true;
           log.warn(`[${game.projectName}] 撞到 10 条 active 上限，尝试删除 Completed 通知腾位 ...`);
           const deleted = await deleteCompletedNotifications(page, cfg);
@@ -219,7 +233,13 @@ async function processGame(
   }
 
   // 全部成功（无失败条目）才标记 completed，供 --resume 整体跳过。
-  if (resume && result.failedLabels.length === 0) {
+  if (
+    resume &&
+    !cfg.dryRun &&
+    cfg.autoTurnOn &&
+    result.failedLabels.length === 0 &&
+    result.succeeded === game.notifications.length
+  ) {
     markGameProgress(resume.path, resume.state, game.projectName, { completed: true });
   }
 
@@ -293,7 +313,14 @@ async function recoverServerErrors(
     }
     try {
       await editNotification(page, notif, cfg);
-      if (cfg.autoTurnOn && !skipTurnOn) await turnOnNotification(page, notif, cfg);
+      if (cfg.autoTurnOn) {
+        if (skipTurnOn) {
+          throw new Error(
+            'ACTIVE_LIMIT: 本条补救后已保存，但因 active 上限未 Turn On，请腾出名额后续跑。',
+          );
+        }
+        await turnOnNotification(page, notif, cfg);
+      }
       result.succeeded += 1;
       log.ok(`[${game.projectName}][${label}] 补救成功。`);
     } catch (e) {
@@ -406,7 +433,10 @@ function preferredHost(cfg: AppConfig): string | undefined {
 }
 
 /** 启动 AdsPower 浏览器，按序处理所有游戏，返回每个游戏的结果。 */
-async function runAutomation(cfg: AppConfig, games: ResolvedGameJob[]): Promise<GameResult[]> {
+export async function runAutomation(
+  cfg: AppConfig,
+  games: ResolvedGameJob[],
+): Promise<GameResult[]> {
   // 启动前探活：已在运行则提示直接接管；顺带尽早暴露「客户端未开启」类问题。
   if (await isActive(cfg.adspower)) {
     log.info('检测到该 AdsPower profile 浏览器已在运行，将直接接管。');
@@ -447,8 +477,17 @@ async function runAutomation(cfg: AppConfig, games: ResolvedGameJob[]): Promise<
       }
 
       if (budget <= 0) {
-        log.warn('已达单次运行条数上限，停止处理后续游戏。');
-        break;
+        log.warn(`已达单次运行条数上限，游戏「${game.projectName}」未处理。`);
+        results.push({
+          projectName: game.projectName,
+          total: game.notifications.length,
+          succeeded: 0,
+          failedLabels: game.notifications.map((notif) => ({
+            label: notif.label,
+            error: 'RUN_LIMIT: 已达单次运行条数上限，本条未处理，请提高 MAX_ITEMS_PER_RUN 后续跑。',
+          })),
+        });
+        continue;
       }
       // 续跑时已上传过的游戏跳过上传，避免重复批量创建。
       const resumeCtx: ResumeCtx = {
@@ -519,7 +558,9 @@ async function run(): Promise<void> {
   });
 }
 
-run().catch((e) => {
-  log.error((e as Error).stack ?? String(e));
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  run().catch((e) => {
+    log.error((e as Error).stack ?? String(e));
+    process.exitCode = 1;
+  });
+}

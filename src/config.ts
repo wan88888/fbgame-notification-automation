@@ -47,6 +47,8 @@ export interface HumanizeConfig {
 }
 
 export interface AppConfig {
+  /** SOP 批次不自动删除其他批次的 Completed 通知。 */
+  sopSafeMode?: boolean;
   adspower: {
     apiBase: string;
     apiKey: string;
@@ -111,6 +113,7 @@ export const DEFAULT_SEND_TIME_STRATEGY = 'Predicted Best Time';
 
 export function loadConfig(): AppConfig {
   const cfg: AppConfig = {
+    sopSafeMode: envBool('OPS_SAFE_MODE', false),
     adspower: {
       apiBase: env('ADSPOWER_API_BASE', 'http://local.adspower.net:50325').replace(/\/+$/, ''),
       apiKey: env('ADSPOWER_API_KEY'),

@@ -7,11 +7,17 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { config } from 'dotenv';
+import { join } from 'node:path';
+import { SopService } from './sop-service.js';
+import { sopRoutes } from './sop-routes.js';
 import { createJob, getJob, listJobs, type JobType } from './jobs.js';
 import { enqueueJob, REPO_ROOT } from './runner.js';
 import { clearCampaignFiles, contentDir, saveUploadedCsv } from './upload.js';
 
+config({ path: join(REPO_ROOT, '.env') });
 const PORT = Number(process.env['OPS_API_PORT'] || 8787);
+const HOST = process.env['OPS_API_HOST'] || '127.0.0.1';
 const TOKEN = (process.env['OPS_API_TOKEN'] || '').trim();
 
 const app = new Hono();
@@ -20,10 +26,12 @@ app.use(
   '*',
   cors({
     origin: (origin) => origin || '*',
-    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
   }),
 );
+
+app.onError((error, c) => c.json({ error: error.message || '操作失败' }, 400));
 
 /** 可选简单鉴权：配置了 OPS_API_TOKEN 则要求 Bearer。 */
 app.use('/api/*', async (c, next) => {
@@ -32,6 +40,10 @@ app.use('/api/*', async (c, next) => {
   if (auth === `Bearer ${TOKEN}`) return next();
   return c.json({ error: 'unauthorized' }, 401);
 });
+
+const sop = new SopService();
+app.route('/api/sop', sopRoutes(sop));
+sop.start();
 
 app.get('/api/health', (c) =>
   c.json({
@@ -103,7 +115,7 @@ app.delete('/api/files/campaigns', (c) => {
 });
 
 console.log(`[ops-api] repo root: ${REPO_ROOT}`);
-console.log(`[ops-api] listening on http://0.0.0.0:${PORT}`);
+console.log(`[ops-api] listening on http://${HOST}:${PORT}`);
 if (TOKEN) console.log('[ops-api] OPS_API_TOKEN 已启用');
 
-serve({ fetch: app.fetch, port: PORT, hostname: '0.0.0.0' });
+serve({ fetch: app.fetch, port: PORT, hostname: HOST });

@@ -1,5 +1,12 @@
 /** 任务持久化（本机 JSON 文件，第一期够用）。 */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { REPO_ROOT } from './paths.js';
@@ -20,6 +27,8 @@ export interface JobRecord {
   log: string;
   error?: string;
   exitCode?: number | null;
+  /** SOP 的不可变独立输入目录，由服务端生成。 */
+  sopBatchId?: string;
 }
 
 const JOBS_DIR = join(REPO_ROOT, '.ops-console', 'jobs');
@@ -29,7 +38,15 @@ function ensureDir(): void {
 }
 
 function jobPath(id: string): string {
+  if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('非法任务 ID');
   return join(JOBS_DIR, `${id}.json`);
+}
+
+function saveJob(job: JobRecord): void {
+  const dest = jobPath(job.id);
+  const temp = `${dest}.tmp`;
+  writeFileSync(temp, JSON.stringify(job, null, 2), 'utf-8');
+  renameSync(temp, dest);
 }
 
 export function createJob(type: JobType, args: string[] = []): JobRecord {
@@ -42,7 +59,7 @@ export function createJob(type: JobType, args: string[] = []): JobRecord {
     args,
     log: '',
   };
-  writeFileSync(jobPath(job.id), JSON.stringify(job, null, 2), 'utf-8');
+  saveJob(job);
   return job;
 }
 
@@ -59,21 +76,21 @@ export function listJobs(limit = 20): JobRecord[] {
     .sort()
     .reverse();
   const out: JobRecord[] = [];
-  for (const f of files.slice(0, limit)) {
+  for (const f of files) {
     try {
       out.push(JSON.parse(readFileSync(join(JOBS_DIR, f), 'utf-8')) as JobRecord);
     } catch {
       // skip corrupt
     }
   }
-  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
 }
 
 export function updateJob(id: string, patch: Partial<JobRecord>): JobRecord {
   const cur = getJob(id);
   if (!cur) throw new Error(`job not found: ${id}`);
   const next = { ...cur, ...patch };
-  writeFileSync(jobPath(id), JSON.stringify(next, null, 2), 'utf-8');
+  saveJob(next);
   return next;
 }
 

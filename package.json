@@ -11,6 +11,7 @@
     "relabel": "tsx src/relabel.ts",
     "ops:api": "npm --prefix apps/api run start",
     "ops:web": "npm --prefix apps/web run dev",
+    "ops:check": "npm run typecheck && npm --prefix apps/api run typecheck && npm --prefix apps/web run build && npm run lint && npm test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

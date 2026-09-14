@@ -14,13 +14,49 @@ export interface Job {
   exitCode?: number | null;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+export const API_TOKEN_KEY = 'fbgame.ops.token';
+
+export async function authorizedFetch(path: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  const token = sessionStorage.getItem(API_TOKEN_KEY);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(path, { ...init, headers });
+}
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await authorizedFetch(path, init);
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) {
     throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
   }
   return data;
+}
+
+export function sopRequest<T>(path = '', body?: unknown, method = 'POST') {
+  return api<T>(
+    `/api/sop${path}`,
+    body === undefined
+      ? undefined
+      : {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+  );
+}
+
+export async function downloadSopFile(path: string, filename: string) {
+  const response = await authorizedFetch(`/api/sop${path}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error || `下载失败（${response.status}）`);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export function getHealth() {

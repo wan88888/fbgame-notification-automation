@@ -1,11 +1,17 @@
-# 运营控制台（方案 A：执行机跑自动化，运营用浏览器遥控）
+# PushLoop 自动推送 SOP 平台
+
+主界面现已升级为每周推送批次工作台：文案生成与审核 → CSV 模板与排期 → 后台执行/人工核验 → 效果回收 → 周报 → 下一周草稿。
+
+完整操作、配置与实际接入边界见 [自动推送平台 SOP](../docs/自动推送平台SOP.md)。固定时刻和独立 Publish 尚需 Facebook 后台联调；当前提供人工排期核验及已有最佳时间执行器。
+
+以下保留原执行机启动方式与旧版工具说明。
 
 ## 架构
 
 ```text
 运营电脑浏览器  →  http://<执行机IP>:5173  (apps/web)
                       ↓ /api 代理
-执行机          →  http://0.0.0.0:8787     (apps/api)
+执行机          →  http://127.0.0.1:8787     (apps/api)
                       ↓ spawn npm 脚本
                 现有 src/ + AdsPower + Meta
 ```
@@ -50,12 +56,15 @@ cat .ops-console/tunnel-url.txt
 
 可选环境变量（执行机）：
 
-| 变量 | 说明 |
-|---|---|
-| `OPS_API_PORT` | API 端口，默认 `8787` |
-| `OPS_API_TOKEN` | 若设置，请求需 `Authorization: Bearer <token>` |
+| 变量                                         | 说明                                           |
+| -------------------------------------------- | ---------------------------------------------- |
+| `OPS_API_HOST`                               | 监听地址，默认 `127.0.0.1`                     |
+| `OPS_AI_URL` / `OPS_AI_MODEL` / `OPS_AI_KEY` | AI 文案接口配置                                |
+| `OPS_METRICS_URL` / `OPS_METRICS_TOKEN`      | 效果 CSV 服务配置                              |
+| `OPS_API_PORT`                               | API 端口，默认 `8787`                          |
+| `OPS_API_TOKEN`                              | 若设置，请求需 `Authorization: Bearer <token>` |
 
-## 页面能力
+## 旧版执行工具
 
 1. **上传 CSV** → `campaigns/推送配置表/`
 2. **准备** = `fix-content-csv` → `gen-schedule` → `check-campaigns`
@@ -66,16 +75,29 @@ cat .ops-console/tunnel-url.txt
 
 ## API 一览
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/health` | 探活 |
+| 方法 | 路径                | 说明                            |
+| ---- | ------------------- | ------------------------------- |
+| GET  | `/api/health`       | 探活                            |
 | POST | `/api/files/upload` | multipart 字段 `file`（可多个） |
-| POST | `/api/jobs` | body: `{ "type": "prepare"|"check"|"run", "args"?: string[] }` |
-| GET | `/api/jobs` | 最近任务 |
-| GET | `/api/jobs/:id` | 任务详情（含 log） |
+| POST | `/api/jobs`         | body: `{ "type": "prepare"      | "check" | "run", "args"?: string[] }` |
+| GET  | `/api/jobs`         | 最近任务                        |
+| GET  | `/api/jobs/:id`     | 任务详情（含 log）              |
 
 ## 注意
 
 - 执行机 AdsPower 需已开并登录 Meta。
 - CSV 文件名保持 `推送配置表 - 游戏名.csv`。
 - 现有 `./run.sh` / CLI 流程不受影响；本控制台是并行入口。
+
+## SOP API
+
+- `GET /api/sop`：默认设置、游戏、能力状态、批次、调度器状态。
+- `PUT /api/sop/settings`：保存平台设置。
+- `POST /api/sop/batches`：创建周二计划。
+- `GET /api/sop/batches/:id`：批次详情。
+- `PUT /api/sop/batches/:id/settings|variants|template`：更新草稿设置、文案或 CSV 模板。
+- `POST /api/sop/batches/:id/generate|prepare|publish|retry|verify|metrics|collect|report|next`：生成、准备、执行、安全续跑、核验、导入、同步、周报、下一轮。
+- `GET /api/sop/batches/:id/csv?kind=content|schedule|plan`：下载 CSV。
+- `GET /api/sop/batches/:id/report/download`：下载 Markdown 周报。
+
+SOP 与旧版任务共用单进程串行执行队列；SOP 产物独立保存，旧版清理按钮不会删除 SOP 批次。

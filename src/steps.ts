@@ -378,7 +378,7 @@ export async function waitForNotificationsListReady(
     if (!uploadVisible) return true;
     await page.waitForTimeout(250);
   }
-  return true;
+  return false;
 }
 
 /** 等待回到通知列表（标题或列表页「Create from CSV」按钮可见）；超时返回 false。 */
@@ -423,6 +423,13 @@ export async function turnOnNotification(
   log.step(`[${notif.label}] 打开行菜单 -> Turn On`);
   await openRowMenu(page, notif.label, t, cfg.humanize);
   await think(cfg.humanize);
+  const turnOff = page.getByText(S.menuItems.turnOff, { exact: true }).first();
+  // 续跑可能遇到已经开启的行；同一行菜单出现 Turn Off 即代表已开启。
+  if (await turnOff.isVisible().catch(() => false)) {
+    await page.keyboard.press('Escape');
+    log.ok(`[${notif.label}] 已确认处于开启状态（菜单显示 Turn Off）`);
+    return;
+  }
   await clickByText(page, S.menuItems.turnOn, t, cfg.humanize);
 
   // 检查是否触发 Meta「每 app 最多 10 条 active」上限提示。
@@ -432,7 +439,20 @@ export async function turnOnNotification(
       'ACTIVE_LIMIT: 已达 Meta 每个 app 最多 10 条 active 通知设置的上限（You cannot have more than 10 active notification settings per app）。',
     );
   }
-  log.ok(`[${notif.label}] 已 Turn On`);
+  // 点击没有报错不等于开启成功。关闭可能残留的菜单，再打开同一行回读状态。
+  await page.keyboard.press('Escape');
+  await openRowMenu(page, notif.label, t, cfg.humanize);
+  try {
+    await turnOff.waitFor({ state: 'visible', timeout: t });
+  } catch (error) {
+    throw new Error(
+      `TURN_ON_UNVERIFIED: [${notif.label}] 点击 Turn On 后未能确认同一行菜单显示 Turn Off，请到后台核验开启状态。`,
+      { cause: error },
+    );
+  } finally {
+    await page.keyboard.press('Escape').catch(() => undefined);
+  }
+  log.ok(`[${notif.label}] 已确认 Turn On（同一行菜单显示 Turn Off）`);
 }
 
 /**
@@ -509,7 +529,9 @@ export async function deleteCompletedNotifications(page: Page, cfg: AppConfig): 
 
   const remaining = await countAfterDeletion(page, () => completedRows().count(), total, t);
   const removed = Math.max(total - remaining, 0);
-  log.ok(`批量删除完成：删除 ${removed}/${total} 条 Completed 通知（剩余 Completed ${remaining}）。`);
+  log.ok(
+    `批量删除完成：删除 ${removed}/${total} 条 Completed 通知（剩余 Completed ${remaining}）。`,
+  );
   if (removed === 0) {
     log.warn('Completed 通知一条都没删掉。请检查勾选是否生效、Delete 确认弹窗是否弹出。');
   }

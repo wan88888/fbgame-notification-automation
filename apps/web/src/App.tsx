@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
@@ -24,6 +24,7 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   DownloadOutlined,
+  DeleteOutlined,
   FileTextOutlined,
   HistoryOutlined,
   PlusOutlined,
@@ -31,28 +32,19 @@ import {
   SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import type {
-  BatchStatus,
-  CopyVariant,
-  SopBatch,
-  SopOverview,
-  SopSettings,
-  Theme,
-} from '../../shared/sop';
+import type { CopyVariant, SopBatch, SopOverview, SopSettings, Theme } from '../../shared/sop';
 import { API_TOKEN_KEY, downloadSopFile, getJob, sopRequest, type Job } from './api';
-import LegacyConsole from './LegacyConsole';
+const LegacyConsole = lazy(() => import('./LegacyConsole'));
+import { Status, PlanList } from './components/PlanList';
+import { PlanActions } from './components/PlanActions';
+import { PlanSettings } from './components/PlanSettings';
+import { TrashDialog } from './components/TrashDialog';
+import { ExecutionChecklist } from './components/ExecutionChecklist';
+import { NotificationSettings } from './components/NotificationSettings';
+import { nextAction } from '../../shared/sop-guidance';
 
 const { Text, Paragraph } = Typography;
 type View = 'overview' | 'copy' | 'results' | 'settings' | 'legacy';
-const statuses: Record<BatchStatus, { text: string; color: string }> = {
-  draft: { text: '文案草稿', color: 'default' },
-  ready: { text: '待执行', color: 'blue' },
-  publishing: { text: '后台执行中', color: 'processing' },
-  verification: { text: '待后台核验', color: 'orange' },
-  scheduled: { text: '排期已核验', color: 'cyan' },
-  failed: { text: '需要处理', color: 'error' },
-  reported: { text: '复盘已完成', color: 'success' },
-};
 const themes: Record<Theme, string> = {
   recall: '玩家召回',
   reward: '奖励激励',
@@ -65,9 +57,6 @@ function nextDate() {
   const d = new Date();
   d.setDate(d.getDate() + ((2 - d.getDay() + 7) % 7 || 7));
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-function Status({ value }: { value: BatchStatus }) {
-  return <Tag color={statuses[value].color}>{statuses[value].text}</Tag>;
 }
 function Field({
   label,
@@ -98,8 +87,11 @@ export default function App() {
   const [settings, setSettings] = useState<SopSettings>();
   const [job, setJob] = useState<Job>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [project, setProject] = useState('');
   const [date, setDate] = useState(nextDate());
+  const [newOwner, setNewOwner] = useState('');
+  const previousVariants = useRef({ id: '', value: '[]' });
   const [note, setNote] = useState('');
   const [metrics, setMetrics] = useState('');
   const [template, setTemplate] = useState('');
@@ -134,23 +126,40 @@ export default function App() {
     setTemplate('');
     setNote('');
   }, [id]);
+  const variantsKey = JSON.stringify(batch?.variants ?? []);
   useEffect(() => {
-    setDrafts(batch?.variants ?? []);
-  }, [batch?.id, batch?.updatedAt]);
+    const previous = previousVariants.current;
+    const next = JSON.parse(variantsKey) as CopyVariant[];
+    setDrafts((current) =>
+      previous.id !== id || JSON.stringify(current) === previous.value ? next : current,
+    );
+    previousVariants.current = { id, value: variantsKey };
+  }, [id, variantsKey]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
   useEffect(() => {
     if (!batch?.jobId) {
       setJob(undefined);
       return;
     }
     let alive = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
     const load = () =>
       getJob(batch.jobId!)
         .then((r) => {
           if (alive) setJob(r.job);
+          if (['succeeded', 'failed'].includes(r.job.status) && timer) clearInterval(timer);
         })
         .catch(() => undefined);
     void load();
-    const timer = setInterval(() => void load(), 2500);
+    timer = setInterval(() => void load(), 2500);
     return () => {
       alive = false;
       clearInterval(timer);
@@ -165,7 +174,10 @@ export default function App() {
         body,
         method,
       );
-      if (res.batch) setId(res.batch.id);
+      if (res.batch) {
+        setId(res.batch.id);
+        if (path.endsWith('/variants') || path.endsWith('/generate')) setDrafts(res.batch.variants);
+      }
       if (res.settings) setSettings(res.settings);
       await refresh();
       message.success(label + '完成');
@@ -203,6 +215,21 @@ export default function App() {
       });
     else change();
   }
+  function generate(mode: 'ai' | 'template') {
+    const run = () => act(`${path}/generate`, { mode }, mode === 'ai' ? 'AI 生成' : '模板生成');
+    if (drafts.length)
+      modal.confirm({
+        title: '重新生成会替换当前候选文案',
+        content: '已有候选及未保存的编辑将被替换。',
+        okText: '重新生成',
+        cancelText: '保留文案',
+        onOk: async () => {
+          if (!(await run())) throw new Error('生成失败');
+        },
+      });
+    else void run();
+  }
+  const guidance = batch ? nextAction(batch) : undefined;
   const completedReports = data?.batches.filter((b) => b.report) ?? [];
   const latestReport = batch?.report;
   const step = !batch
@@ -215,13 +242,14 @@ export default function App() {
         failed: 2,
         scheduled: 4,
         reported: 5,
+        cancelled: -1,
       }[batch.status];
   const nav = [
     { key: 'overview', label: '运营工作台', icon: <BarChartOutlined /> },
     { key: 'copy', label: '文案与排期', icon: <FileTextOutlined /> },
+    { key: 'legacy', label: '旧版执行工具', icon: <HistoryOutlined /> },
     { key: 'results', label: '效果与周报', icon: <CalendarOutlined /> },
     { key: 'settings', label: '平台设置', icon: <SettingOutlined /> },
-    { key: 'legacy', label: '旧版执行工具', icon: <HistoryOutlined /> },
   ] as const;
 
   const noBatch = (
@@ -373,9 +401,19 @@ export default function App() {
       <main className="workspace">
         <header className="topbar">
           <span>
-            运营空间 <span className="muted">/ {nav.find((n) => n.key === view)?.label}</span>
+            运营空间{' '}
+            <span className="muted">
+              / {nav.find((n) => n.key === view)?.label}
+            </span>
           </span>
           <Space>
+            <Button
+              disabled={!data || !!busy}
+              onClick={() => setTrashOpen(true)}
+              icon={<DeleteOutlined />}
+            >
+              回收站{data?.deletedBatches?.length ? ` (${data.deletedBatches.length})` : ''}
+            </Button>
             <Tag bordered={false}>WEEKLY SOP</Tag>
             <Button aria-label="刷新" icon={<ReloadOutlined />} onClick={() => void refresh()} />
           </Space>
@@ -401,7 +439,8 @@ export default function App() {
               type="primary"
               size="large"
               icon={<PlusOutlined />}
-              disabled={!data || !!busy}
+              disabled={!data || !!busy || dirty}
+              title={dirty ? '请先保存文案' : undefined}
               onClick={() => setCreateOpen(true)}
             >
               创建推送计划
@@ -448,6 +487,9 @@ export default function App() {
                     <span className="muted">当前批次</span>
                     <Select
                       aria-label="当前批次"
+                      showSearch
+                      optionFilterProp="label"
+                      disabled={!!busy}
                       className="batch-select"
                       value={batch?.id}
                       placeholder="选择推送批次"
@@ -455,6 +497,48 @@ export default function App() {
                       onChange={selectBatch}
                     />
                     {batch && <Status value={batch.status} />}
+                    {batch && (
+                      <PlanActions
+                        key={batch.id}
+                        batch={batch}
+                        busy={!!busy}
+                        dirty={dirty}
+                        act={act}
+                      />
+                    )}
+                    {batch && (
+                      <Button
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={!editable || !!busy}
+                        title={
+                          editable
+                            ? '删除后可从回收站恢复'
+                            : '已执行计划需保留记录，取消发送请到 Facebook 后台操作'
+                        }
+                        onClick={() =>
+                          modal.confirm({
+                            title: `删除计划「${batch.name}」？`,
+                            content:
+                              '计划将移入回收站，文案与文件可恢复。删除本地计划不会取消已经在 Facebook 设置的推送。',
+                            okText: '移入回收站',
+                            cancelText: '保留计划',
+                            okType: 'danger',
+                            onOk: async () => {
+                              const result = await act(
+                                `/batches/${batch.id}`,
+                                {},
+                                '删除计划',
+                                'DELETE',
+                              );
+                              if (!result) throw new Error('删除失败，请查看错误提示');
+                            },
+                          })
+                        }
+                      >
+                        删除计划
+                      </Button>
+                    )}
                   </Space>
                   {batch && (
                     <span className="muted">
@@ -465,6 +549,34 @@ export default function App() {
                     </span>
                   )}
                 </div>
+              )}
+              {batch && guidance && view !== 'settings' && view !== 'legacy' && (
+                <Alert
+                  showIcon
+                  type={batch.error || batch.status === 'failed' ? 'warning' : 'info'}
+                  message={guidance.title}
+                  description={
+                    <>
+                      {guidance.detail}
+                      <br />
+                      <strong>当前结果依据：</strong>
+                      {batch.metrics.length
+                        ? '已导入效果数据（按来源统计）'
+                        : batch.verificationNote
+                          ? '运营人工核验，尚无发送数据'
+                          : batch.jobId
+                            ? '执行记录，尚未确认送达'
+                            : '平台草稿或本地文件'}
+                      {view !== guidance.view && (
+                        <div>
+                          <Button type="link" onClick={() => setView(guidance.view)}>
+                            {guidance.action} →
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  }
+                />
               )}
               {view === 'overview' && (
                 <>
@@ -508,7 +620,13 @@ export default function App() {
                     <Steps
                       responsive
                       current={step}
-                      status={batch?.status === 'failed' ? 'error' : 'process'}
+                      status={
+                        batch?.status === 'cancelled'
+                          ? 'wait'
+                          : batch?.status === 'failed'
+                            ? 'error'
+                            : 'process'
+                      }
                       items={[
                         '生成文案',
                         '审核与 CSV',
@@ -522,9 +640,11 @@ export default function App() {
                       <Text type="secondary">
                         批次状态会随实际操作推进，排期核验完成不代表已送达。
                       </Text>
-                      <Button type="link" onClick={() => setView(step >= 4 ? 'results' : 'copy')}>
-                        继续当前流程 <ArrowRightOutlined />
-                      </Button>
+                      {batch?.status !== 'cancelled' && (
+                        <Button type="link" onClick={() => setView(step >= 4 ? 'results' : 'copy')}>
+                          继续当前流程 <ArrowRightOutlined />
+                        </Button>
+                      )}
                     </div>
                   </Card>
                   <div className="two-columns">
@@ -532,37 +652,17 @@ export default function App() {
                       title="推送计划"
                       extra={<Text type="secondary">{data.batches.length} 个批次</Text>}
                     >
-                      {!data.batches.length ? (
-                        <Empty
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="创建第一份推送计划"
-                        />
-                      ) : (
-                        <div className="batch-list">
-                          {data.batches.slice(0, 8).map((b) => (
-                            <button
-                              key={b.id}
-                              onClick={() => {
-                                selectBatch(b.id);
-                                setView('copy');
-                              }}
-                            >
-                              <div className="calendar-tile">{b.weekOf.slice(5)}</div>
-                              <div className="batch-name">
-                                <strong>{b.projectName}</strong>
-                                <small>
-                                  {b.variants.length} 条候选 ·{' '}
-                                  {b.settings.timingMode === 'fixed'
-                                    ? b.settings.sendTime
-                                    : '最佳时间'}
-                                </small>
-                              </div>
-                              <Status value={b.status} />
-                              <ArrowRightOutlined />
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      <PlanList
+                        batches={data.batches}
+                        disabled={!!busy || dirty}
+                        onOpen={(next) => {
+                          selectBatch(next);
+                          setView('copy');
+                        }}
+                        onDelete={async (next) =>
+                          Boolean(await act(`/batches/${next}`, {}, '删除计划', 'DELETE'))
+                        }
+                      />
                     </Card>
                     <Card title="连接与自动化">
                       <div className="connection-list">
@@ -620,7 +720,15 @@ export default function App() {
                         type="warning"
                         showIcon
                         message="本批次需要处理"
-                        description={batch.error}
+                        description={
+                          <>
+                            <p>{nextAction(batch).detail}</p>
+                            <details>
+                              <summary>技术详情（供管理员排查）</summary>
+                              {batch.error}
+                            </details>
+                          </>
+                        }
                       />
                     )}
                     <Card
@@ -638,15 +746,13 @@ export default function App() {
                             loading={busy === 'AI 生成'}
                             disabled={!editable || !!busy || !data.capabilities.ai}
                             icon={<ThunderboltOutlined />}
-                            onClick={() => void act(`${path}/generate`, { mode: 'ai' }, 'AI 生成')}
+                            onClick={() => generate('ai')}
                           >
                             AI 生成文案
                           </Button>
                           <Button
                             disabled={!editable || !!busy}
-                            onClick={() =>
-                              void act(`${path}/generate`, { mode: 'template' }, '模板生成')
-                            }
+                            onClick={() => generate('template')}
                           >
                             使用模板（非 AI）
                           </Button>
@@ -733,13 +839,31 @@ export default function App() {
                         </div>
                       )}
                     </Card>
+                    {!!drafts.length && (
+                      <Card
+                        title="发送内容预览"
+                        extra={<Tag>{dirty ? '未保存预览' : '已保存文案'}</Tag>}
+                      >
+                        <div className="notification-preview">
+                          <span>{batch.projectName} · 游戏通知</span>
+                          <h3>{drafts.find((v) => v.selected)?.title}</h3>
+                          <p>{drafts.find((v) => v.selected)?.body}</p>
+                        </div>
+                        <Paragraph type="secondary">
+                          {batch.weekOf} ·{' '}
+                          {batch.settings.timingMode === 'fixed'
+                            ? `${batch.settings.sendTime} ${batch.settings.timezone}`
+                            : '最佳时间 · UTC 日期'}
+                          。仅预览文字，实际图片和样式请在 Facebook 核对。
+                        </Paragraph>
+                      </Card>
+                    )}
                     <Card title="02 / CSV 模板与排期">
                       <div className="two-columns plain">
                         <div>
                           <h3>Facebook 内容模板</h3>
                           <p className="muted">
-                            上传该游戏在 Facebook 验证过的 CSV：表头 + 一条样例。保留图片、payload
-                            等固定字段，替换所选语言的文案，其他语言文案留空。
+                            首次使用请上传该游戏验证过的模板（表头和一条样例）。复制计划会继承模板；多语言映射由管理员在高级选项中设置。
                           </p>
                           {batch.csvTemplate && (
                             <Tag color="success">模板已保存 · {batch.csvTemplate.titleColumn}</Tag>
@@ -760,24 +884,27 @@ export default function App() {
                               }
                             }}
                           />
-                          <div className="form-grid">
-                            <Field label="标题列（单语言模板可留空）">
-                              <Input
-                                value={titleColumn}
-                                placeholder="notification_title_English"
-                                disabled={!editable}
-                                onChange={(e) => setTitleColumn(e.target.value)}
-                              />
-                            </Field>
-                            <Field label="正文列">
-                              <Input
-                                value={bodyColumn}
-                                placeholder="notification_body_English"
-                                disabled={!editable}
-                                onChange={(e) => setBodyColumn(e.target.value)}
-                              />
-                            </Field>
-                          </div>
+                          <details>
+                            <summary>高级：多语言模板字段映射</summary>
+                            <div className="form-grid">
+                              <Field label="标题列（单语言模板可留空）">
+                                <Input
+                                  value={titleColumn}
+                                  placeholder="notification_title_English"
+                                  disabled={!editable}
+                                  onChange={(e) => setTitleColumn(e.target.value)}
+                                />
+                              </Field>
+                              <Field label="正文列">
+                                <Input
+                                  value={bodyColumn}
+                                  placeholder="notification_body_English"
+                                  disabled={!editable}
+                                  onChange={(e) => setBodyColumn(e.target.value)}
+                                />
+                              </Field>
+                            </div>
+                          </details>
                           <Button
                             disabled={!editable || !!busy || !template}
                             onClick={() =>
@@ -811,22 +938,11 @@ export default function App() {
                               ? '需要在 Facebook 手动设置准确时刻并核验。'
                               : '由 Facebook 在该 UTC 日期内选择发送时间，不承诺固定时分。'}
                           </p>
-                          <Space wrap>
-                            <Button
-                              disabled={!editable || !!busy}
-                              onClick={() =>
-                                void act(
-                                  `${path}/settings`,
-                                  { ...data.settings, projectKey: batch.projectKey },
-                                  '应用平台设置',
-                                  'PUT',
-                                )
-                              }
-                            >
-                              应用当前平台设置到草稿
-                            </Button>
-                            <Button onClick={() => setView('settings')}>修改默认设置</Button>
-                          </Space>
+                          <PlanSettings
+                            batch={batch}
+                            disabled={!editable || !!busy || dirty}
+                            act={act}
+                          />
                         </div>
                       </div>
                       <div className="section-actions">
@@ -857,7 +973,14 @@ export default function App() {
                           下载 FB 内容 CSV
                         </Button>
                         <Button
-                          disabled={!batch.variants.length || dirty}
+                          disabled={
+                            !batch.variants.length || dirty || batch.settings.timingMode === 'fixed'
+                          }
+                          title={
+                            batch.settings.timingMode === 'fixed'
+                              ? '固定时刻请下载运营计划，并在 Facebook 人工设置'
+                              : undefined
+                          }
                           onClick={() => void download('schedule')}
                         >
                           下载排期表
@@ -879,35 +1002,16 @@ export default function App() {
                             : '请确认 AdsPower 已开启并登录正确账号。脚本完成后仍需核验；自动化不会把点击成功视为推送送达。'
                         }
                       />
-                      <div className="section-actions">
-                        <Button
-                          type="primary"
-                          disabled={
-                            !!busy ||
-                            batch.status !== 'ready' ||
-                            batch.settings.timingMode === 'fixed' ||
-                            !data.capabilities.adspower ||
-                            dirty
-                          }
-                          loading={batch.status === 'publishing'}
-                          onClick={() =>
-                            modal.confirm({
-                              title: '执行本批次 Facebook 排期',
-                              content: `${batch.projectName} · ${batch.weekOf} · ${batch.variants.find((v) => v.selected)?.title}。将上传并开启这一条真实通知。`,
-                              okText: '执行排期',
-                              cancelText: '返回检查',
-                              onOk: () =>
-                                act(`${path}/publish`, {}, '后台执行').then(() => undefined),
-                            })
-                          }
-                        >
-                          执行后台排期
-                        </Button>
-                        <Status value={batch.status} />
-                      </div>
+                      <ExecutionChecklist
+                        key={batch.id}
+                        batch={batch}
+                        dirty={dirty}
+                        busy={!!busy}
+                        onExecute={(checks) => act(`${path}/publish`, checks, '后台执行')}
+                      />
                       {job && (
-                        <details open={batch.status === 'publishing' || batch.status === 'failed'}>
-                          <summary>执行日志 · {job.status}</summary>
+                        <details>
+                          <summary>技术执行日志 · {job.status}</summary>
                           <pre className="log-box">{job.log || '等待执行机日志…'}</pre>
                         </details>
                       )}
@@ -990,7 +1094,7 @@ export default function App() {
                               rows={5}
                               value={metrics}
                               onChange={(e) => setMetrics(e.target.value)}
-                              placeholder={`label,sent,opened,clicked,recalled,recall_eligible,window_hours\n${batch.variants.find((v) => v.selected)?.label || '文案label'},,,,,,168`}
+                              placeholder={`label,sent,opened,clicked,recalled,recall_eligible,window_hours\n${batch.variants.find((v) => v.selected)?.label || '文案label'},,,,,,${batch.settings.observationHours ?? 144}`}
                             />
                           </Field>
                           <input
@@ -1041,7 +1145,8 @@ export default function App() {
                           <p>召回率 = 回流人数 / 可召回人数</p>
                           <small>
                             人数需按文案和观察窗口去重。缺失值不会当作
-                            0；不同窗口不直接比较。默认窗口为 168 小时。
+                            0；不同窗口不直接比较。本计划建议窗口为{' '}
+                            {batch.settings.observationHours ?? 144} 小时。
                           </small>
                         </div>
                       </div>
@@ -1133,7 +1238,12 @@ export default function App() {
                             </div>
                             <Button
                               type="primary"
-                              disabled={!!busy}
+                              disabled={!!busy || !!batch.nextBatchDiscardedAt}
+                              title={
+                                batch.nextBatchDiscardedAt
+                                  ? '下一周草稿已永久删除；如需重新安排，请使用上方「复制计划」'
+                                  : undefined
+                              }
                               icon={<ArrowRightOutlined />}
                               onClick={() =>
                                 void act(
@@ -1145,7 +1255,11 @@ export default function App() {
                                 })
                               }
                             >
-                              {batch.nextBatchId ? '打开下一周草稿' : '创建下一周草稿'}
+                              {batch.nextBatchDiscardedAt
+                                ? '下一周草稿已永久删除'
+                                : batch.nextBatchId
+                                  ? '打开下一周草稿'
+                                  : '创建下一周草稿'}
                             </Button>
                           </div>
                         </>
@@ -1167,7 +1281,7 @@ export default function App() {
                         保存平台设置
                       </Button>
                       <Text type="secondary">
-                        新批次使用这些默认值；已有草稿可在「文案与排期」应用设置。
+                        新批次使用这些默认值；已有草稿在「文案与排期」直接编辑本计划策略。
                       </Text>
                     </div>
                   </Card>
@@ -1211,61 +1325,88 @@ export default function App() {
                       保存自动化设置
                     </Button>
                   </Card>
-                  <Card title="服务连接">
-                    <div className="two-columns plain">
-                      <div>
-                        <h3>
-                          AI 文案接口{' '}
-                          <Tag color={data.capabilities.ai ? 'success' : 'default'}>
-                            {data.capabilities.ai ? '已配置' : '未配置'}
-                          </Tag>
-                        </h3>
-                        <p>由技术同事在执行机 .env 配置 Chat Completions 兼容接口：</p>
-                        <code>
-                          OPS_AI_URL
-                          <br />
-                          OPS_AI_MODEL
-                          <br />
-                          OPS_AI_KEY
-                        </code>
-                        <p className="muted">URL 为完整接口地址，API Key 只存放在服务端。</p>
+                  <NotificationSettings
+                    key={`${data.notifications.enabled}-${data.notifications.recipientLabel}`}
+                    value={data.notifications}
+                    busy={!!busy}
+                    act={act}
+                  />
+                  <details>
+                    <summary>高级设置 · 服务连接、访问令牌与兼容工具（技术同事使用）</summary>
+                    <Card title="服务连接">
+                      <div className="two-columns plain">
+                        <div>
+                          <h3>
+                            AI 文案接口{' '}
+                            <Tag color={data.capabilities.ai ? 'success' : 'default'}>
+                              {data.capabilities.ai ? '已配置' : '未配置'}
+                            </Tag>
+                          </h3>
+                          <p>由技术同事在执行机 .env 配置 Chat Completions 兼容接口：</p>
+                          <code>
+                            OPS_AI_URL
+                            <br />
+                            OPS_AI_MODEL
+                            <br />
+                            OPS_AI_KEY
+                          </code>
+                          <p className="muted">URL 为完整接口地址，API Key 只存放在服务端。</p>
+                        </div>
+                        <div>
+                          <h3>
+                            效果接口{' '}
+                            <Tag color={data.capabilities.metrics ? 'success' : 'default'}>
+                              {data.capabilities.metrics ? '已配置' : '未配置'}
+                            </Tag>
+                          </h3>
+                          <code>
+                            OPS_METRICS_URL
+                            <br />
+                            OPS_METRICS_TOKEN
+                          </code>
+                          <p className="muted">
+                            GET 接口按 batch_id、project_key、week_of、labels 返回上述效果
+                            CSV。Facebook 与游戏回流埋点需先由数据服务汇总。
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h3>
-                          效果接口{' '}
-                          <Tag color={data.capabilities.metrics ? 'success' : 'default'}>
-                            {data.capabilities.metrics ? '已配置' : '未配置'}
-                          </Tag>
-                        </h3>
-                        <code>
-                          OPS_METRICS_URL
-                          <br />
-                          OPS_METRICS_TOKEN
-                        </code>
-                        <p className="muted">
-                          GET 接口按 batch_id、project_key、week_of、labels 返回上述效果
-                          CSV。Facebook 与游戏回流埋点需先由数据服务汇总。
+                      <div className="verification">
+                        <Field label="控制台 API Token（仅当前浏览器会话）">
+                          <Input.Password
+                            value={token}
+                            onChange={(e) => setToken(e.target.value)}
+                          />
+                        </Field>
+                        <Button
+                          onClick={() => {
+                            sessionStorage.setItem(API_TOKEN_KEY, token.trim());
+                            void refresh();
+                            message.success('访问令牌已更新');
+                          }}
+                        >
+                          保存令牌并重连
+                        </Button>
+                      </div>
+                      <div className="verification">
+                        <h3>飞书机器人（SOP 专用）</h3>
+                        <p>
+                          配置 OPS_FEISHU_WEBHOOK_URL，可选 OPS_FEISHU_SIGN_SECRET。密钥仅存执行机
+                          .env；配置后重启 API。旧执行器的 FEISHU_WEBHOOK_URL 不会自动用于 SOP。
                         </p>
+                        <Button icon={<HistoryOutlined />} onClick={() => setView('legacy')}>
+                          打开旧版兼容工具
+                        </Button>
                       </div>
-                    </div>
-                    <div className="verification">
-                      <Field label="控制台 API Token（仅当前浏览器会话）">
-                        <Input.Password value={token} onChange={(e) => setToken(e.target.value)} />
-                      </Field>
-                      <Button
-                        onClick={() => {
-                          sessionStorage.setItem(API_TOKEN_KEY, token.trim());
-                          void refresh();
-                          message.success('访问令牌已更新');
-                        }}
-                      >
-                        保存令牌并重连
-                      </Button>
-                    </div>
-                  </Card>
+                    </Card>
+                  </details>
                 </>
               )}
-              {view === 'legacy' && <LegacyConsole />}
+              {view === 'legacy' && (
+                <Suspense fallback={<Spin />}>
+                  <Button onClick={() => setView('settings')}>返回平台设置</Button>
+                  <LegacyConsole />
+                </Suspense>
+              )}
             </>
           )}
           <footer className="page-footer">
@@ -1273,6 +1414,22 @@ export default function App() {
           </footer>
         </div>
       </main>
+      <TrashDialog
+        open={trashOpen}
+        batches={data?.deletedBatches ?? []}
+        busy={!!busy}
+        restoreDisabled={dirty}
+        onClose={() => setTrashOpen(false)}
+        onRefresh={refresh}
+        onRestore={async (next) => {
+          const result = await act(`/batches/${next}/restore`, {}, '恢复计划');
+          if (result) {
+            setTrashOpen(false);
+            setView('copy');
+          }
+          return result;
+        }}
+      />
       <Modal
         title="创建每周推送计划"
         open={createOpen}
@@ -1281,7 +1438,11 @@ export default function App() {
         cancelText="取消"
         confirmLoading={!!busy}
         onOk={() =>
-          void act('/batches', { projectKey: project, weekOf: date }, '创建计划').then((res) => {
+          void act(
+            '/batches',
+            { projectKey: project, weekOf: date, owner: newOwner },
+            '创建计划',
+          ).then((res) => {
             if (res) {
               setCreateOpen(false);
               setView('copy');
@@ -1297,6 +1458,14 @@ export default function App() {
             value={project}
             options={data?.projects.map((p) => ({ value: p.key, label: p.name }))}
             onChange={setProject}
+          />
+        </Field>
+        <Field label="负责人（选填）">
+          <Input
+            value={newOwner}
+            maxLength={80}
+            onChange={(e) => setNewOwner(e.target.value)}
+            placeholder="负责审核、执行和跟进此计划的同事"
           />
         </Field>
         <Field label="推送日期（周二）">

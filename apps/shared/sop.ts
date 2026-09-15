@@ -1,6 +1,13 @@
 export type Theme = 'recall' | 'reward' | 'challenge';
 export type BatchStatus =
-  'draft' | 'ready' | 'publishing' | 'verification' | 'scheduled' | 'failed' | 'reported';
+  | 'draft'
+  | 'ready'
+  | 'publishing'
+  | 'verification'
+  | 'scheduled'
+  | 'failed'
+  | 'reported'
+  | 'cancelled';
 
 export interface SopSettings {
   projectKey: string;
@@ -86,6 +93,10 @@ export interface SopBatch {
   report?: WeeklyReport;
   parentId?: string;
   nextBatchId?: string;
+  nextBatchDiscardedAt?: string;
+  deletedAt?: string;
+  owner?: string;
+  cancellationNote?: string;
   csvTemplate?: { columns: string[]; values: string[]; titleColumn: string; bodyColumn: string };
   audit: AuditEvent[];
 }
@@ -100,5 +111,35 @@ export interface SopOverview {
     adspower: boolean;
   };
   batches: SopBatch[];
+  deletedBatches?: SopBatch[];
   scheduler: { running: boolean; intervalSeconds: number; lastTick?: string; error?: string };
+  notifications: {
+    enabled: boolean;
+    configured: boolean;
+    recipientLabel: string;
+    records: NotificationRecord[];
+  };
+}
+
+export interface NotificationRecord {
+  id: string;
+  batchId: string;
+  title: string;
+  text: string;
+  createdAt: string;
+  status: 'pending' | 'sent' | 'failed' | 'cancelled';
+  attempts: number;
+  lastAttemptAt?: string;
+  error?: string;
+}
+export interface PreflightCheck {
+  key: string;
+  title: string;
+  status: 'pass' | 'blocked' | 'manual' | 'warning';
+  detail: string;
+}
+export interface PreflightResult {
+  checkedAt: string;
+  checks: PreflightCheck[];
+  canExecute: boolean;
 }

@@ -710,3 +710,69 @@ summary:focus-visible {
     flex-direction: column;
   }
 }
+
+.notification-preview {
+  max-width: 440px;
+  background: #f4f7f2;
+  padding: 22px;
+  border: 1px solid #dbe5d9;
+  border-radius: 14px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.notification-preview > span {
+  color: #788777;
+  font-size: 12px;
+}
+.notification-preview h3 {
+  margin: 12px 0 6px;
+}
+.notification-preview p {
+  white-space: pre-wrap;
+  margin: 0;
+}
+.preflight-panel {
+  padding-top: 18px;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #edf1eb;
+}
+.check-row p {
+  color: #71817a;
+  font-size: 12px;
+  margin: 6px 0;
+}
+.preflight-panel .ant-checkbox-group {
+  margin-top: 20px;
+}
+.two-columns > *,
+.form-grid > * {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .topbar > span {
+    white-space: nowrap;
+  }
+  .topbar .ant-tag {
+    display: none;
+  }
+  .page-heading {
+    flex-wrap: wrap;
+  }
+}
+.trash-toolbar,
+.trash-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 0;
+}
+.trash-row {
+  border-bottom: 1px solid #edf1eb;
+}

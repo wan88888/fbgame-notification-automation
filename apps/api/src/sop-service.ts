@@ -1,8 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'csv-parse/sync';
-import type { CopyVariant, SopBatch, SopOverview, SopSettings, Theme } from '../../shared/sop.js';
+import type {
+  CopyVariant,
+  SopBatch,
+  SopOverview,
+  SopSettings,
+  Theme,
+  PreflightResult,
+} from '../../shared/sop.js';
 import {
   buildNotificationsUrl,
   DEFAULT_NOTIFICATIONS_URL_TEMPLATE,
@@ -12,6 +19,12 @@ import { buildReport, parseMetricsCsv } from './sop-analytics.js';
 import { createJob, getJob, updateJob, type JobRecord } from './jobs.js';
 import { enqueueJob } from './runner.js';
 import { REPO_ROOT } from './paths.js';
+import {
+  flushNotifications,
+  notificationConfigured,
+  queueNotification,
+  type NotificationState,
+} from './sop-notifications.js';
 
 export class SopError extends Error {
   constructor(
@@ -24,6 +37,7 @@ export class SopError extends Error {
 interface State {
   settings: SopSettings;
   batches: SopBatch[];
+  notifications?: NotificationState;
 }
 const THEMES: Theme[] = ['recall', 'reward', 'challenge'];
 const DEFAULTS: SopSettings = {
@@ -94,6 +108,26 @@ export class SopService {
       ? (JSON.parse(readFileSync(path, 'utf8')) as State)
       : { settings: { ...DEFAULTS, projectKey: this.projects()[0]?.key || '' }, batches: [] };
   }
+  private notificationState(): NotificationState {
+    return (this.state.notifications ??= { enabled: false, recipientLabel: '', records: [] });
+  }
+  notificationSettings(input: { enabled?: unknown; recipientLabel?: unknown }) {
+    if (typeof input.enabled !== 'boolean') throw new SopError('通知开关无效');
+    const label = textField(input.recipientLabel, '接收群名称', 100, input.enabled);
+    if (input.enabled && !notificationConfigured())
+      throw new SopError('请先由管理员配置 SOP 专用飞书机器人');
+    const state = this.notificationState();
+    // 关闭或更换接收群时不把历史待发消息发送到新接收方。
+    if (!input.enabled || label !== state.recipientLabel) {
+      for (const record of state.records) {
+        if (record.status === 'pending' || record.status === 'failed') record.status = 'cancelled';
+      }
+    }
+    state.enabled = input.enabled;
+    state.recipientLabel = label;
+    this.persist();
+    return this.overview().notifications;
+  }
   projects() {
     const path = join(REPO_ROOT, 'campaigns', 'projects.json');
     const entries = existsSync(path)
@@ -118,10 +152,16 @@ export class SopService {
     this.syncJobs();
     return structuredClone({
       settings: this.state.settings,
-      batches: [...this.state.batches].reverse(),
+      batches: this.state.batches.filter((b) => !b.deletedAt).reverse(),
+      deletedBatches: this.state.batches.filter((b) => b.deletedAt).reverse(),
       projects: this.projects().map(({ key, name }) => ({ key, name })),
       capabilities: this.capabilities(),
       scheduler: this.scheduler,
+      notifications: {
+        ...this.notificationState(),
+        configured: notificationConfigured(),
+        records: this.notificationState().records.slice(-50).reverse(),
+      },
     });
   }
   private persist() {
@@ -132,10 +172,11 @@ export class SopService {
   private event(batch: SopBatch, action: string, detail: string) {
     batch.updatedAt = this.now().toISOString();
     batch.audit.push({ at: batch.updatedAt, action, detail });
+    queueNotification(this.notificationState(), batch, action, batch.updatedAt);
     this.persist();
   }
-  private find(id: string): SopBatch {
-    const batch = this.state.batches.find((b) => b.id === id);
+  private find(id: string, includeDeleted = false): SopBatch {
+    const batch = this.state.batches.find((b) => b.id === id && (includeDeleted || !b.deletedAt));
     if (!batch) throw new SopError('批次不存在', 404);
     return batch;
   }
@@ -143,7 +184,112 @@ export class SopService {
     this.syncJobs();
     return structuredClone(this.find(id));
   }
+  remove(id: string) {
+    this.unlocked(id);
+    const batch = this.find(id, true);
+    if (batch.deletedAt) return;
+    if (!['draft', 'ready'].includes(batch.status) || batch.jobId || batch.verificationNote) {
+      throw new SopError(
+        '仅未执行的草稿或待执行计划可删除。已执行计划需保留记录；取消发送请到 Facebook 后台处理。',
+        409,
+      );
+    }
+    batch.deletedAt = this.now().toISOString();
+    for (const record of this.notificationState().records) {
+      if (record.batchId === id && ['pending', 'failed'].includes(record.status))
+        record.status = 'cancelled';
+    }
+    this.event(batch, 'deleted', '计划已移入回收站，内容和文件保留；未操作 Facebook');
+  }
+  restore(id: string) {
+    this.unlocked(id);
+    const batch = this.find(id, true);
+    if (!batch.deletedAt) return structuredClone(batch);
+    if (
+      this.state.batches.some(
+        (b) =>
+          b.id !== id &&
+          !b.deletedAt &&
+          b.projectKey === batch.projectKey &&
+          b.weekOf === batch.weekOf,
+      )
+    ) {
+      throw new SopError('该游戏本周已有其他计划，无法恢复；请先处理重复计划', 409);
+    }
+    batch.deletedAt = undefined;
+    batch.status = 'draft';
+    this.event(batch, 'restored', '已从回收站恢复为草稿，请重新检查排期并准备 CSV');
+    return structuredClone(batch);
+  }
+  purgeTrash(input: unknown) {
+    if (
+      !Array.isArray(input) ||
+      input.length > 10000 ||
+      input.some(
+        (id) => typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id),
+      )
+    )
+      throw new SopError('请选择有效的回收站计划');
+    const ids = [...new Set(input as string[])];
+    // 按用户确认时的列表删除；其他同事随后移入回收站的计划不受影响。
+    // 先检查全部目标，避免某条已恢复后仍继续清空其他计划。
+    for (const id of ids) {
+      this.unlocked(id);
+      const batch = this.state.batches.find((b) => b.id === id);
+      if (
+        batch &&
+        (!batch.deletedAt ||
+          !['draft', 'ready'].includes(batch.status) ||
+          batch.jobId ||
+          batch.verificationNote)
+      )
+        throw new SopError('计划状态已变化，仅可永久删除回收站中的未执行计划。请刷新后重试。', 409);
+    }
+    const result: { purgedIds: string[]; failed: { id: string; error: string }[] } = {
+      purgedIds: [],
+      failed: [],
+    };
+    for (const id of ids) {
+      if (!this.state.batches.some((b) => b.id === id)) continue; // 重复请求无副作用。
+      const before = structuredClone(this.state);
+      try {
+        rmSync(join(this.root, 'artifacts', id), { recursive: true, force: true });
+        this.state.batches = this.state.batches.filter((b) => b.id !== id);
+        this.notificationState().records = this.notificationState().records.filter(
+          (r) => r.batchId !== id,
+        );
+        for (const parent of this.state.batches) {
+          if (parent.nextBatchId === id) {
+            parent.nextBatchId = undefined;
+            parent.nextBatchDiscardedAt = this.now().toISOString();
+            parent.updatedAt = parent.nextBatchDiscardedAt;
+            parent.audit.push({
+              at: parent.updatedAt,
+              action: 'next_draft_purged',
+              detail: '下一周草稿已永久删除，不会自动重新创建；如需重新安排可复制计划。',
+            });
+          }
+          if (parent.parentId === id) parent.parentId = undefined;
+        }
+        this.persist();
+        result.purgedIds.push(id);
+      } catch {
+        this.state = before;
+        result.failed.push({
+          id,
+          error:
+            '本地文件清理或保存失败，计划记录仍保留；请联系管理员检查磁盘权限后重试。恢复使用前需重新准备 CSV。',
+        });
+      }
+    }
+    return result;
+  }
   settings(input: unknown): SopSettings {
+    this.state.settings = this.validateSettings(input);
+    this.persist();
+    return structuredClone(this.state.settings);
+  }
+  private validateSettings(input: unknown): SopSettings {
     if (!input || typeof input !== 'object') throw new SopError('设置格式错误');
     const v = input as SopSettings;
     if (!this.projects().some((p) => p.key === v.projectKey))
@@ -175,7 +321,7 @@ export class SopService {
     const observationHours = v.observationHours ?? 144;
     if (!Number.isInteger(observationHours) || observationHours < 1 || observationHours > 168)
       throw new SopError('自动复盘窗口需为 1–168 小时');
-    this.state.settings = {
+    return {
       projectKey: v.projectKey,
       timezone: v.timezone,
       sendTime: v.sendTime,
@@ -188,12 +334,12 @@ export class SopService {
       brief: textField(v.brief, '活动信息', 4000, false),
       autoCollect: v.autoCollect,
       autoNextDraft: v.autoNextDraft,
+      observationHours,
     };
-    this.state.settings.observationHours = observationHours;
-    this.persist();
-    return structuredClone(this.state.settings);
   }
-  create(input: { weekOf?: string; projectKey?: string; parentId?: string } = {}): SopBatch {
+  create(
+    input: { weekOf?: string; projectKey?: string; parentId?: string; owner?: string } = {},
+  ): SopBatch {
     if (input.parentId) return this.next(input.parentId);
     const settings = structuredClone(this.state.settings);
     if (input.projectKey) settings.projectKey = input.projectKey;
@@ -202,7 +348,11 @@ export class SopService {
     const weekOf = input.weekOf ?? nextTuesday(this.now(), settings.timezone);
     const scheduledAt = scheduleInstant(weekOf, settings);
     if (new Date(scheduledAt) <= this.now()) throw new SopError('不能创建已过期的排期');
-    if (this.state.batches.some((b) => b.projectKey === project.key && b.weekOf === weekOf))
+    if (
+      this.state.batches.some(
+        (b) => !b.deletedAt && b.projectKey === project.key && b.weekOf === weekOf,
+      )
+    )
       throw new SopError('该游戏本周已有批次，请使用已有批次', 409);
     const batch: SopBatch = {
       id: randomUUID(),
@@ -214,6 +364,7 @@ export class SopService {
       settings,
       status: 'draft',
       variants: [],
+      owner: textField(input.owner ?? '', '负责人', 80, false),
       createdAt: this.now().toISOString(),
       updatedAt: this.now().toISOString(),
       metrics: [],
@@ -221,6 +372,77 @@ export class SopService {
     };
     this.state.batches.push(batch);
     this.event(batch, 'created', '创建每周推送草稿');
+    return structuredClone(batch);
+  }
+  assignOwner(id: string, owner: unknown) {
+    this.unlocked(id);
+    const batch = this.find(id);
+    batch.owner = textField(owner, '负责人', 80, false);
+    this.event(batch, 'owner_updated', `负责人：${batch.owner || '未指定'}`);
+    return structuredClone(batch);
+  }
+  duplicate(id: string, weekOf: string) {
+    this.unlocked(id);
+    const source = this.find(id);
+    const scheduledAt = scheduleInstant(weekOf, source.settings);
+    if (new Date(scheduledAt) <= this.now()) throw new SopError('复制后的排期已过期');
+    // 先以来源设置校验，避免全局默认时间干扰复制结果。
+    const project = this.projects().find((p) => p.key === source.projectKey);
+    if (!project) throw new SopError('游戏配置不存在');
+    if (
+      this.state.batches.some(
+        (b) => !b.deletedAt && b.projectKey === source.projectKey && b.weekOf === weekOf,
+      )
+    )
+      throw new SopError('该游戏本周已有计划，请选择其他周二', 409);
+    const target: SopBatch = {
+      id: randomUUID(),
+      name: `${project.name} · ${weekOf}`,
+      projectKey: source.projectKey,
+      projectName: project.name,
+      weekOf,
+      scheduledAt,
+      settings: structuredClone(source.settings),
+      status: 'draft',
+      variants: [],
+      metrics: [],
+      audit: [],
+      owner: source.owner,
+      createdAt: this.now().toISOString(),
+      updatedAt: this.now().toISOString(),
+      csvTemplate: source.csvTemplate ? structuredClone(source.csvTemplate) : undefined,
+    };
+    if (source.variants.length) target.variants = this.normalizeVariants(target, source.variants);
+    this.state.batches.push(target);
+    this.event(
+      target,
+      'duplicated',
+      `复制自 ${source.name}；文案与模板已继承，请复核活动有效期并重新准备 CSV`,
+    );
+    return structuredClone(target);
+  }
+  cancel(id: string, input: { note?: unknown; remoteCancelled?: unknown }) {
+    this.unlocked(id);
+    this.syncJobs();
+    const batch = this.find(id);
+    if (batch.status === 'cancelled') return structuredClone(batch);
+    if (['publishing', 'reported'].includes(batch.status))
+      throw new SopError('执行中的计划需等待结果后处理；已复盘计划保留历史记录', 409);
+    const note = textField(input.note, '取消原因', 2000);
+    if ((batch.jobId || batch.verificationNote) && input.remoteCancelled !== true)
+      throw new SopError('请先在 Facebook 撤回或关闭通知，并确认后台不会继续发送', 409);
+    batch.status = 'cancelled';
+    batch.cancellationNote = note;
+    batch.error = undefined;
+    for (const record of this.notificationState().records) {
+      if (record.batchId === id && ['pending', 'failed'].includes(record.status))
+        record.status = 'cancelled';
+    }
+    this.event(
+      batch,
+      'cancelled',
+      `停止平台后续处理：${note}${input.remoteCancelled === true ? '；运营确认已在 Facebook 关闭或撤回' : ''}`,
+    );
     return structuredClone(batch);
   }
   private editable(batch: SopBatch) {
@@ -283,15 +505,7 @@ export class SopService {
     this.unlocked(id);
     const batch = this.find(id);
     this.editable(batch);
-    // 复用设置校验；保留全局默认值，仅更新当前草稿。
-    const defaults = structuredClone(this.state.settings);
-    let settings: SopSettings;
-    try {
-      settings = this.settings(input);
-    } finally {
-      this.state.settings = defaults;
-      this.persist();
-    }
+    const settings = this.validateSettings(input);
     if (settings.projectKey !== batch.projectKey)
       throw new SopError('草稿不能更换游戏，请新建批次');
     const scheduledAt = scheduleInstant(batch.weekOf, settings);
@@ -551,6 +765,117 @@ export class SopService {
     );
     return structuredClone(batch);
   }
+  async preflight(id: string): Promise<PreflightResult> {
+    const batch = this.get(id);
+    const checks: PreflightResult['checks'] = [];
+    const add = (key: string, title: string, passed: boolean, detail: string) =>
+      checks.push({ key, title, status: passed ? 'pass' : 'blocked', detail });
+    const predicted = batch.settings.timingMode === 'predicted';
+    add(
+      'ready',
+      'CSV 已准备',
+      batch.status === 'ready',
+      '请先保存文案、导入模板，再点击「校验并准备 CSV」。',
+    );
+    add(
+      'date',
+      '排期仍有效',
+      new Date(predicted ? `${batch.weekOf}T00:00:00Z` : batch.scheduledAt) > this.now(),
+      `${batch.weekOf} · ${predicted ? '最佳时间 / UTC 日期，须提前一天完成' : `${batch.settings.sendTime} / ${batch.settings.timezone}`}。过期计划请复制到未来周二。`,
+    );
+    let contentValid = true;
+    try {
+      this.normalizeVariants(batch, batch.variants);
+      this.exportCsv(id, 'content');
+    } catch {
+      contentValid = false;
+    }
+    add('content', '发送文案与模板', contentValid, '需要恰好一条已选文案及有效的 Facebook 模板。');
+    const artifacts = ['content.csv', 'schedule.csv', 'plan.csv', 'games.json'];
+    add(
+      'files',
+      '执行文件完整',
+      artifacts.every((f) => existsSync(join(this.root, 'artifacts', id, f))),
+      '文件缺失时请重新准备 CSV。',
+    );
+    checks.push({
+      key: 'mode',
+      title: '后台执行方式',
+      status: predicted ? 'pass' : 'manual',
+      detail: predicted
+        ? '执行器将上传、保存并开启通知；结束后仍需核验。'
+        : '固定时刻需人工上传、排期、开启并完成 Publish，然后记录核验。',
+    });
+    if (predicted) {
+      let active = false;
+      if (this.capabilities().adspower) {
+        try {
+          const base = (process.env.ADSPOWER_API_BASE || 'http://local.adspower.net:50325').replace(
+            /\/+$/,
+            '',
+          );
+          const res = await this.request(
+            `${base}/api/v1/browser/active?user_id=${encodeURIComponent(process.env.ADSPOWER_USER_ID!)}`,
+            {
+              headers: process.env.ADSPOWER_API_KEY
+                ? { Authorization: `Bearer ${process.env.ADSPOWER_API_KEY}` }
+                : {},
+              signal: AbortSignal.timeout(5000),
+              redirect: 'error',
+            },
+          );
+          const value = (await res.json()) as { code?: number; data?: { status?: string } };
+          active = res.ok && value.code === 0 && value.data?.status === 'Active';
+        } catch {
+          /* 连接失败只影响此检查，不泄露地址或密钥。 */
+        }
+      }
+      add(
+        'browser',
+        '执行浏览器已打开',
+        active,
+        active
+          ? '已确认 AdsPower 浏览器活动状态；Facebook 登录和账号仍需人工核对。'
+          : '请打开 AdsPower 中的执行环境；若仍失败，请联系管理员检查连接配置。',
+      );
+    }
+    checks.push({
+      key: 'account',
+      title: '账号、内容和日期复核',
+      status: 'manual',
+      detail: '请人工确认 Facebook 已登录正确账号，游戏、文案、奖励有效期、日期和时区正确。',
+    });
+    checks.push({
+      key: 'metrics',
+      title: '效果数据来源',
+      status: this.capabilities().metrics ? 'pass' : 'warning',
+      detail: this.capabilities().metrics
+        ? '效果接口已配置，真实数据是否可用需在观察窗口结束后同步验证。'
+        : '未配置自动效果接口，发送后需导入效果 CSV。',
+    });
+    return {
+      checkedAt: this.now().toISOString(),
+      checks,
+      canExecute: predicted && !checks.some((c) => c.status === 'blocked'),
+    };
+  }
+  async executeChecked(
+    id: string,
+    confirmation: { account?: unknown; content?: unknown; schedule?: unknown },
+  ) {
+    if (
+      confirmation.account !== true ||
+      confirmation.content !== true ||
+      confirmation.schedule !== true
+    )
+      throw new SopError('请先确认账号、文案奖励和日期时区');
+    const before = JSON.stringify(this.get(id));
+    const result = await this.preflight(id);
+    if (!result.canExecute) throw new SopError('执行前检查未通过，请处理检查列表中的阻塞项', 409);
+    if (before !== JSON.stringify(this.get(id)))
+      throw new SopError('计划在检查期间发生变更，请重新检查', 409);
+    return this.publish(id);
+  }
   publish(id: string): { batch: SopBatch; job: JobRecord } {
     this.unlocked(id);
     this.syncJobs();
@@ -706,10 +1031,18 @@ export class SopService {
   next(id: string): SopBatch {
     this.unlocked(id);
     const parent = this.find(id);
+    if (parent.status === 'cancelled') throw new SopError('已取消计划不会创建下一周草稿', 409);
     if (!parent.report) throw new SopError('请先完成本周效果报告', 409);
+    if (parent.nextBatchDiscardedAt)
+      throw new SopError(
+        '下一周草稿已永久删除，不会自动重新创建；如需重新安排请使用「复制计划」',
+        409,
+      );
     const existing = parent.nextBatchId
-      ? this.find(parent.nextBatchId)
+      ? this.find(parent.nextBatchId, true)
       : this.state.batches.find((b) => b.parentId === id);
+    if (existing?.deletedAt)
+      throw new SopError('下一周草稿已删除，可在回收站恢复；不会自动重新创建', 409);
     if (existing) return structuredClone(existing);
     const day = new Date(`${parent.weekOf}T00:00:00Z`);
     day.setUTCDate(day.getUTCDate() + 7);
@@ -765,8 +1098,27 @@ export class SopService {
     this.scheduler.error = undefined;
     try {
       this.syncJobs();
-      for (const batch of [...this.state.batches]) {
+      for (const batch of this.state.batches.filter(
+        (b) => !b.deletedAt && b.status !== 'cancelled',
+      )) {
         try {
+          if (
+            ['draft', 'ready'].includes(batch.status) &&
+            new Date(
+              batch.settings.timingMode === 'predicted'
+                ? `${batch.weekOf}T00:00:00Z`
+                : batch.scheduledAt,
+            ).getTime() -
+              this.now().getTime() <=
+              86400_000 &&
+            !batch.audit.some((e) => e.action === 'schedule_attention')
+          ) {
+            this.event(
+              batch,
+              'schedule_attention',
+              '排期距离现在不足 24 小时或已过期；平台不会自动启动发布，请运营处理',
+            );
+          }
           const due =
             new Date(batch.scheduledAt).getTime() +
               (batch.settings.observationHours ?? 144) * 3600_000 <=
@@ -785,7 +1137,12 @@ export class SopService {
             if (!batch.metrics.length) await this.collect(batch.id);
             this.report(batch.id);
           }
-          if (this.state.settings.autoNextDraft && batch.report && !batch.nextBatchId) {
+          if (
+            this.state.settings.autoNextDraft &&
+            batch.report &&
+            !batch.nextBatchId &&
+            !batch.nextBatchDiscardedAt
+          ) {
             const child = this.next(batch.id);
             if (this.capabilities().ai) await this.generate(child.id, 'ai');
           }
@@ -798,6 +1155,9 @@ export class SopService {
           }
         }
       }
+      await flushNotifications(this.notificationState(), this.now(), this.request, () =>
+        this.persist(),
+      );
     } finally {
       this.ticking = false;
     }
